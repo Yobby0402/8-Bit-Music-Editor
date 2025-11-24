@@ -109,13 +109,13 @@ class SequenceBlock(QGraphicsItem):
                 self.label = drum_type_names.get(item.drum_type, "打击")
             else:
                 # 兼容旧的Note对象（根据音高判断）
-                pitch_to_drum = {
-                    36: "底鼓",   # C2
-                    38: "军鼓",   # D2
-                    42: "踩镲",   # F#2
-                    49: "吊镲",   # C#3
-                }
-                self.label = pitch_to_drum.get(item.pitch, "打击")
+            pitch_to_drum = {
+                36: "底鼓",   # C2
+                38: "军鼓",   # D2
+                42: "踩镲",   # F#2
+                49: "吊镲",   # C#3
+            }
+            self.label = pitch_to_drum.get(item.pitch, "打击")
         
         self.setFlag(QGraphicsItem.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
@@ -134,7 +134,7 @@ class SequenceBlock(QGraphicsItem):
             duration_beats = self.item.duration_beats
         else:
             # Note 使用时间，需要转换为节拍
-            duration_beats = self.item.duration * self.bpm / 60.0
+        duration_beats = self.item.duration * self.bpm / 60.0
         width = max(20, duration_beats * self.pixels_per_beat)  # 最小20像素
         
         return QRectF(0, 0, width, 40)
@@ -233,29 +233,29 @@ class SequenceBlock(QGraphicsItem):
                         ))
                 else:
                     # Note 使用时间
-                    new_start_time = snapped_beats * 60.0 / self.bpm
-                    
-                    # 检查重叠和交换位置
-                    if self.parent_widget and hasattr(self.parent_widget, 'check_and_resolve_overlap'):
-                        # 让父widget处理重叠检测和位置交换
-                        resolved_time = self.parent_widget.check_and_resolve_overlap(
-                            self.item, self.track, new_start_time, self
-                        )
-                        if resolved_time is not None:
-                            new_start_time = resolved_time
-                            # 重新计算吸附位置
-                            snapped_beats = new_start_time * self.bpm / 60.0
-                    
-                    # 转换回像素位置
-                    snapped_x = 100 + snapped_beats * self.pixels_per_beat
-                    
-                    # 设置吸附后的位置
-                    self.setPos(snapped_x, self.original_y)
-                    
-                    # 更新音符的start_time（确保不小于0且与原来的值不同）
-                    if new_start_time >= 0 and abs(self.item.start_time - new_start_time) > 0.001:
-                        old_start_time = self.item.start_time
-                        self.item.start_time = new_start_time
+                new_start_time = snapped_beats * 60.0 / self.bpm
+                
+                # 检查重叠和交换位置
+                if self.parent_widget and hasattr(self.parent_widget, 'check_and_resolve_overlap'):
+                    # 让父widget处理重叠检测和位置交换
+                    resolved_time = self.parent_widget.check_and_resolve_overlap(
+                        self.item, self.track, new_start_time, self
+                    )
+                    if resolved_time is not None:
+                        new_start_time = resolved_time
+                        # 重新计算吸附位置
+                        snapped_beats = new_start_time * self.bpm / 60.0
+                
+                # 转换回像素位置
+                snapped_x = 100 + snapped_beats * self.pixels_per_beat
+                
+                # 设置吸附后的位置
+                self.setPos(snapped_x, self.original_y)
+                
+                # 更新音符的start_time（确保不小于0且与原来的值不同）
+                if new_start_time >= 0 and abs(self.item.start_time - new_start_time) > 0.001:
+                    old_start_time = self.item.start_time
+                    self.item.start_time = new_start_time
                         # 延迟发送位置改变信号，传递旧位置和新位置
                         QTimer.singleShot(0, lambda: self.signals.position_changed.emit(self.item, old_start_time, new_start_time))
             
@@ -360,6 +360,15 @@ class GridSequenceWidget(QWidget):
         
         track_selection_layout.addStretch()
         layout.addLayout(track_selection_layout)
+        
+        # ========== 时间轴（在音轨区域上方，可拖动调节播放线）==========
+        from ui.timeline_widget import TimelineWidget
+        self.timeline = TimelineWidget()
+        self.timeline.setMinimumHeight(50)
+        self.timeline.setMaximumHeight(50)
+        # 连接时间轴的播放线改变信号
+        self.timeline.playhead_time_changed.connect(self.on_timeline_playhead_changed)
+        layout.addWidget(self.timeline)
         
         # 场景和视图（直接添加到布局，不使用QScrollArea）
         self.scene = QGraphicsScene()
@@ -543,9 +552,10 @@ class GridSequenceWidget(QWidget):
                     block.setPos(snapped_x, block.original_y)
                     
                     if abs(block.item.start_time - new_start_time) > 0.001:
+                        old_time = block.item.start_time
                         block.item.start_time = new_start_time
-                        QTimer.singleShot(0, lambda n=block.item, t=new_start_time: 
-                                        block.signals.position_changed.emit(n, t))
+                        QTimer.singleShot(0, lambda n=block.item, old_t=old_time, new_t=new_start_time: 
+                                        block.signals.position_changed.emit(n, old_t, new_t))
     
     def delete_selected_note(self):
         """删除选中的音符（支持多选，通过信号通知主窗口处理）"""
@@ -561,8 +571,8 @@ class GridSequenceWidget(QWidget):
                     self.refresh_ui()
             elif self.selected_item in self.selected_track.notes:
                 notes_to_delete.append((self.selected_item, self.selected_track))
-            self.selected_item = None
-            self.selected_track = None
+        self.selected_item = None
+        self.selected_track = None
         
         # 处理多选
         if self.selected_items:
@@ -613,6 +623,9 @@ class GridSequenceWidget(QWidget):
     def set_bpm(self, bpm: float):
         """设置BPM"""
         self.bpm = bpm
+        # 更新时间轴的BPM
+        if hasattr(self, 'timeline'):
+            self.timeline.set_bpm(bpm)
         self.refresh()
     
     def set_highlighted_track(self, track):
@@ -649,9 +662,9 @@ class GridSequenceWidget(QWidget):
                 return
             
             # 增量更新模式
-            # 保存播放头时间
-            old_playhead_time = self.playhead_time
-            
+        # 保存播放头时间
+        old_playhead_time = self.playhead_time
+        
             # 禁用视图自动更新，减少闪烁
             self.view.setUpdatesEnabled(False)
             
@@ -682,6 +695,13 @@ class GridSequenceWidget(QWidget):
                 # 根据内容调整场景大小
                 scene_width = max(2000, max_x)
                 self.scene.setSceneRect(0, 0, scene_width, scene_height)
+                
+                # 更新时间轴的总节拍数和每拍像素数
+                if hasattr(self, 'timeline'):
+                    # 计算总节拍数（从场景宽度计算）
+                    total_beats = max(32, int((scene_width - 100) / self.pixels_per_beat) + 4)
+                    self.timeline.set_total_beats(total_beats)
+                    self.timeline.set_pixels_per_beat(self.pixels_per_beat)
                 
                 # 动态调整视图高度（但不限制最大高度，允许滚动）
                 if self.tracks:
@@ -765,12 +785,12 @@ class GridSequenceWidget(QWidget):
                     x = 100 + end_beats * self.pixels_per_beat + 20
                     max_x = max(max_x, x)
             else:
-                for note in track.notes:
-                    start_beats = note.start_time * self.bpm / 60.0
-                    duration_beats = note.duration * self.bpm / 60.0
-                    end_beats = start_beats + duration_beats
+            for note in track.notes:
+                start_beats = note.start_time * self.bpm / 60.0
+                duration_beats = note.duration * self.bpm / 60.0
+                end_beats = start_beats + duration_beats
                     x = 100 + end_beats * self.pixels_per_beat + 20
-                    max_x = max(max_x, x)
+                max_x = max(max_x, x)
         
         # 根据轨道数量调整场景高度
         if self.tracks:
@@ -930,7 +950,7 @@ class GridSequenceWidget(QWidget):
                     self._update_or_create_block(block_key, event, track, i, y, "drum")
             else:
                 sorted_notes = sorted(track.notes, key=lambda n: n.start_time)
-                for note in sorted_notes:
+            for note in sorted_notes:
                     block_key = (id(note), id(track))
                     track_type = self.get_track_type(track)
                     self._update_or_create_block(block_key, note, track, i, y, track_type)
@@ -994,8 +1014,8 @@ class GridSequenceWidget(QWidget):
                 start_beats = item.start_time * self.bpm / 60.0
             
             start_beats = round(start_beats * 4) / 4
-            x = 100 + start_beats * self.pixels_per_beat
-            
+                x = 100 + start_beats * self.pixels_per_beat
+                
             block.setPos(x, y)
             
             # 设置高z值，确保音符在网格线之上
@@ -1131,17 +1151,17 @@ class GridSequenceWidget(QWidget):
                     start_beats = note.start_time * self.bpm / 60.0
                     start_beats = round(start_beats * 4) / 4
                     x = 100 + start_beats * self.pixels_per_beat
-                    block = SequenceBlock(note, track, i, track_type, y, self.bpm, self.pixels_per_beat, parent_widget=self)
-                    block.setPos(x, y)
+                block = SequenceBlock(note, track, i, track_type, y, self.bpm, self.pixels_per_beat, parent_widget=self)
+                block.setPos(x, y)
                     block.setZValue(10)  # 确保音符在网格线之上
-                    if self.selected_item == note:
-                        block.setSelected(True)
-                    if (note, track) in self.selected_items:
-                        block.setSelected(True)
-                    block.signals.clicked.connect(lambda n, t=track: self.on_note_block_clicked(n, t))
+                if self.selected_item == note:
+                    block.setSelected(True)
+                if (note, track) in self.selected_items:
+                    block.setSelected(True)
+                block.signals.clicked.connect(lambda n, t=track: self.on_note_block_clicked(n, t))
                     block.signals.position_changed.connect(lambda n, old_st, new_st, t=track: self.on_note_position_changed(n, t, old_st, new_st))
-                    self.scene.addItem(block)
-                    self.note_blocks[(id(note), id(track))] = block
+                self.scene.addItem(block)
+                self.note_blocks[(id(note), id(track))] = block
     
     def on_note_block_clicked(self, note, track):
         """音符块被点击"""
@@ -1200,7 +1220,7 @@ class GridSequenceWidget(QWidget):
             for beat in range(0, max_beats):
                 # 跳过小节线（每4拍），避免重复
                 if beat % 4 != 0:
-                    x = 100 + beat * self.pixels_per_beat
+            x = 100 + beat * self.pixels_per_beat
                     if x <= scene_width:
                         pen = QPen(border_light_color, 1)
                         line_item = self.scene.addLine(x, 0, x, scene_height, pen)
@@ -1212,7 +1232,7 @@ class GridSequenceWidget(QWidget):
             for beat in range(0, max_beats * 4):
                 # 跳过拍线（每拍），避免重复
                 if beat % 4 != 0:
-                    x = 100 + beat * self.pixels_per_beat / 4
+            x = 100 + beat * self.pixels_per_beat / 4
                     if x <= scene_width:
                         pen = QPen(border_lighter_color, 1, Qt.DashLine)
                         line_item = self.scene.addLine(x, 0, x, scene_height, pen)
@@ -1251,6 +1271,10 @@ class GridSequenceWidget(QWidget):
         """设置播放头时间"""
         self.playhead_time = time
         self.draw_playhead()
+        
+        # 更新时间轴的播放线位置
+        if hasattr(self, 'timeline'):
+            self.timeline.set_playhead_time(time)
         
         # 如果播放头超出视图范围，自动滚动
         beats_per_second = self.bpm / 60.0
@@ -1324,9 +1348,9 @@ class GridSequenceWidget(QWidget):
                         old_start_beats = old_start_time * self.bpm / 60.0
                         other_snapped_x = 100 + old_start_beats * self.pixels_per_beat
                         other_block.setPos(other_snapped_x, other_block.original_y)
-                        # 发送位置改变信号
+                        # 发送位置改变信号（需要3个参数：item, old_time, new_time）
                         QTimer.singleShot(0, lambda: other_block.signals.position_changed.emit(
-                            other_note, other_note.start_time
+                            other_note, old_start_time, other_note.start_time
                         ))
                     
                     # 当前音符使用新位置
@@ -1630,6 +1654,13 @@ class GridSequenceWidget(QWidget):
             if checkbox_proxy and checkbox_proxy.scene() and i < len(self.tracks):
                 y = i * track_spacing + 20 + 15
                 checkbox_proxy.setPos(5, y)
+    
+    def on_timeline_playhead_changed(self, time: float):
+        """时间轴播放线位置改变"""
+        # 设置序列编辑器的播放线位置
+        self.set_playhead_time(time)
+        # 发送信号通知主窗口
+        self.playhead_time_changed.emit(time)
     
     def update_blocks_for_zoom(self):
         """更新所有块的位置和大小以适应新的缩放比例（不重建场景）"""
