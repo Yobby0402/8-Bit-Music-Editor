@@ -1,0 +1,59 @@
+"""
+8bit音乐制作器 - 程序入口
+
+运行此文件启动应用程序。
+""" 
+
+import sys
+import os
+from PyQt5.QtWidgets import QApplication
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QFont
+
+from ui.main_window import MainWindow
+
+
+def main():
+    """主函数"""
+    # 启用高DPI支持（在创建QApplication之前）
+    # Windows上启用DPI感知
+    if sys.platform == "win32":
+        # 设置环境变量启用高DPI支持
+        os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
+        os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
+        # 启用DPI感知
+        try:
+            QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+            QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+        except:
+            pass
+    
+    app = QApplication(sys.argv)
+    
+    # 设置自适应字体大小（根据DPI）
+    # 获取屏幕DPI缩放比例
+    screen = app.primaryScreen()
+    dpi_scale = screen.logicalDotsPerInch() / 96.0  # 96是标准DPI
+    base_font_size = max(9, int(9 * dpi_scale))  # 基础字体大小，最小9px
+    
+    # 设置应用程序默认字体
+    default_font = QFont()
+    default_font.setPointSize(base_font_size)
+    app.setFont(default_font)
+    
+    # 设置应用程序信息
+    app.setApplicationName("8bit音乐制作器")
+    app.setApplicationVersion("0.1.0")
+    app.setOrganizationName("8bit Music Maker")
+    
+    # 创建主窗口
+    window = MainWindow()
+    window.show()
+    
+    # 运行应用程序
+    sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    main()
+

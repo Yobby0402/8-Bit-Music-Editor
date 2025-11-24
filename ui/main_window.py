@@ -1,0 +1,1645 @@
+"""
+主窗口模块
+
+应用程序的主窗口界面。
+"""
+
+from PyQt5.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QMenuBar, QMenu, QToolBar, QStatusBar, QAction,
+    QMessageBox, QFileDialog, QSplitter, QDialog,
+    QDockWidget, QSlider, QDialogButtonBox, QLabel, QComboBox, QApplication, QDesktopWidget
+)
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QIcon, QKeySequence, QKeyEvent
+
+from core.sequencer import Sequencer
+from core.models import Project, WaveformType, Track, Note, TrackType
+from core.midi_io import MidiIO
+from core.track_events import DrumType
+
+from ui.unified_editor_widget import UnifiedEditorWidget
+from ui.grid_sequence_widget import GridSequenceWidget
+from ui.timeline_widget import TimelineWidget
+from ui.property_panel_widget import PropertyPanelWidget
+from ui.metronome_widget import MetronomeWidget
+from ui.theme import theme_manager
+from ui.shortcut_manager import get_shortcut_manager
+from ui.shortcut_config_dialog import ShortcutConfigDialog
+from PyQt5.QtWidgets import QStackedWidget, QTabWidget, QPushButton, QButtonGroup, QSpinBox
+
+
+class MainWindow(QMainWindow):
+    """主窗口"""
+    
+    def __init__(self):
+        """初始化主窗口"""
+        super().__init__()
+        
+        self.sequencer = Sequencer()
+        self.current_file_path = None
+        
+        # 初始化快捷键管理器
+        self.shortcut_manager = get_shortcut_manager()
+        
+        self.init_ui()
+        self.setup_menu()
+        self.setup_toolbar()
+        self.setup_statusbar()
+        self.setup_shortcuts()
+        
+        # 定时器用于更新播放状态和播放头
+        self.update_timer = QTimer()
+        self.update_timer.timeout.connect(self.update_playback_status)
+        self.update_timer.start(50)  # 每50ms更新一次（更流畅）
+        
+        # 播放开始时间（用于计算播放位置）
+        self.playback_start_time = None
+        self.playback_start_offset = 0.0  # 播放开始时的偏移时间
+    
+    def init_ui(self):
+        """初始化UI"""
+        self.setWindowTitle("8bit音乐制作器")
+        # 使用屏幕尺寸的80%作为默认窗口大小，确保在不同分辨率下都能正常显示
+        desktop = QApplication.desktop()
+        screen = desktop.screenGeometry()
+        default_width = int(screen.width() * 0.8)
+        default_height = int(screen.height() * 0.8)
+        self.setGeometry(
+            int(screen.width() * 0.1),
+            int(screen.height() * 0.1),
+            default_width,
+            default_height
+        )
+        
+        # 创建中央部件
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        
+        # 主布局（垂直，分为上下两部分）
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        central_widget.setLayout(main_layout)
+        
+        # ========== 上方：统一编辑器（整合所有功能）==========
+        note_selection_area = QWidget()
+        # 移除固定高度限制，使用拉伸因子确保各占一半
+        note_selection_layout = QHBoxLayout()
+        note_selection_layout.setContentsMargins(0, 0, 0, 0)
+        note_selection_area.setLayout(note_selection_layout)
+        
+        # 设置大小策略，确保高度固定
+        from PyQt5.QtWidgets import QSizePolicy
+        note_selection_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        
+        # 统一编辑器（包含波形、音轨类型、钢琴键盘、打击乐、拍数）
+        self.unified_editor = UnifiedEditorWidget(self.sequencer.get_bpm())
+        # 将sequencer的audio_engine传递给预览组件，以便应用主音量
+        self.unified_editor.audio_engine = self.sequencer.audio_engine
+        if hasattr(self.unified_editor, 'piano_keyboard'):
+            self.unified_editor.piano_keyboard.audio_engine = self.sequencer.audio_engine
+        note_selection_layout.addWidget(self.unified_editor)
+        
+        main_layout.addWidget(note_selection_area, 1)  # 拉伸因子1，占一半
+        
+        # ========== 下方：音轨区域 ==========
+        track_area = QWidget()
+        track_area_layout = QVBoxLayout()
+        track_area_layout.setContentsMargins(0, 0, 0, 0)
+        track_area.setLayout(track_area_layout)
+        
+        # 设置大小策略，确保高度固定
+        track_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        
+        # 上方：播放控制区域
+        playback_control_area = QWidget()
+        playback_control_layout = QHBoxLayout()
+        playback_control_layout.setContentsMargins(8, 6, 8, 6)
+        playback_control_layout.setSpacing(8)
+        playback_control_area.setLayout(playback_control_layout)
+        
+        # ========== 左侧：播放控制按钮 ==========
+        # 播放按钮组（使用图标）
+        self.play_button = QPushButton("▶")  # 播放图标
+        self.play_button.setToolTip("播放")
+        self.play_button.clicked.connect(self.play)
+        playback_control_layout.addWidget(self.play_button)
+        
+        self.pause_button = QPushButton("⏸")  # 暂停图标
+        self.pause_button.setToolTip("暂停")
+        self.pause_button.clicked.connect(self.pause)
+        playback_control_layout.addWidget(self.pause_button)
+        
+        self.stop_button = QPushButton("⏹")  # 停止图标
+        self.stop_button.setToolTip("停止")
+        self.stop_button.clicked.connect(self.stop)
+        playback_control_layout.addWidget(self.stop_button)
+        
+        playback_control_layout.addSpacing(16)
+        
+        # ========== 中间：节拍器和BPM ==========
+        # 节拍器
+        self.metronome_widget = MetronomeWidget()
+        self.metronome_widget.set_bpm(self.sequencer.get_bpm())
+        playback_control_layout.addWidget(self.metronome_widget)
+        
+        playback_control_layout.addSpacing(8)
+        
+        # BPM控制
+        bpm_label = QLabel("BPM:")
+        playback_control_layout.addWidget(bpm_label)
+        self.bpm_spinbox = QSpinBox()
+        self.bpm_spinbox.setRange(30, 300)
+        self.bpm_spinbox.setValue(120)
+        self.bpm_spinbox.setMinimumWidth(60)
+        self.bpm_spinbox.valueChanged.connect(self.on_bpm_changed)
+        playback_control_layout.addWidget(self.bpm_spinbox)
+        
+        playback_control_layout.addStretch()
+        
+        # ========== 右侧：音量控制 ==========
+        # 播放音量控制
+        volume_label = QLabel("音量:")
+        playback_control_layout.addWidget(volume_label)
+        self.volume_slider = QSlider(Qt.Horizontal)
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setValue(100)
+        # 实时更新音量（拖动时立即生效）
+        self.volume_slider.valueChanged.connect(self.on_volume_changed)
+        self.volume_slider.setMinimumWidth(120)
+        self.volume_slider.setMaximumWidth(150)
+        playback_control_layout.addWidget(self.volume_slider)
+        
+        self.volume_label = QLabel("100%")
+        self.volume_label.setMinimumWidth(40)
+        playback_control_layout.addWidget(self.volume_label)
+        
+        track_area_layout.addWidget(playback_control_area)
+        
+        # 下方：音轨区域（序列编辑器）
+        self.sequence_widget = GridSequenceWidget(self.sequencer.get_bpm())
+        # 连接添加音轨按钮（从序列编辑器移到了主窗口的播放控制区域）
+        # 现在需要连接到序列编辑器中的按钮
+        track_area_layout.addWidget(self.sequence_widget, 1)  # 可拉伸
+        
+        # 连接序列编辑器中的添加音轨按钮
+        self.sequence_widget.add_track_button.clicked.connect(self.on_add_track_clicked)
+        
+        main_layout.addWidget(track_area, 1)  # 拉伸因子1，占一半
+        
+        # ========== 属性面板：使用浮动窗口（DockWidget）==========
+        self.property_dock = QDockWidget("属性面板", self)
+        self.property_panel = PropertyPanelWidget()
+        self.property_dock.setWidget(self.property_panel)
+        self.property_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.property_dock)
+        # 默认不显示，需要时通过菜单显示
+        self.property_dock.setVisible(False)
+        # 允许关闭，但可以通过菜单重新打开
+        self.property_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable | QDockWidget.DockWidgetClosable)
+        
+        # 连接信号
+        self.connect_signals()
+        
+        # 应用主题
+        self.apply_theme()
+        
+        # 设置中央部件和各个区域的背景色（统一使用background颜色）
+        theme = theme_manager.current_theme
+        bg_color = theme.get_color('background')
+        central_widget.setStyleSheet(f"background-color: {bg_color};")
+        note_selection_area.setStyleSheet(f"background-color: {bg_color};")
+        track_area.setStyleSheet(f"background-color: {bg_color};")
+        playback_control_area.setStyleSheet(f"background-color: {bg_color};")
+        
+        # 不再自动创建默认音轨（用户需要手动创建）
+        # self.init_default_tracks()
+        
+        # 初始化显示
+        self.refresh_ui()
+    
+    def apply_theme(self):
+        """应用主题到所有UI组件"""
+        theme = theme_manager.current_theme
+        
+        # 主窗口背景
+        self.setStyleSheet(theme.get_style("main_window"))
+        
+        # 菜单栏
+        if hasattr(self, 'menuBar'):
+            self.menuBar().setStyleSheet(theme.get_style("menu_bar"))
+        
+        # 工具栏
+        if hasattr(self, 'toolbar'):
+            self.toolbar.setStyleSheet(theme.get_style("toolbar"))
+        
+        # 状态栏
+        if hasattr(self, 'statusBar'):
+            self.statusBar().setStyleSheet(theme.get_style("status_bar"))
+        
+        # 按钮样式
+        button_style = theme.get_style("button")
+        button_small_style = theme.get_style("button_small")
+        
+        # 播放控制按钮
+        if hasattr(self, 'play_button'):
+            self.play_button.setStyleSheet(button_style)
+        if hasattr(self, 'pause_button'):
+            self.pause_button.setStyleSheet(button_style)
+        if hasattr(self, 'stop_button'):
+            self.stop_button.setStyleSheet(button_style)
+        # 添加音轨按钮现在在序列编辑器中
+        if hasattr(self, 'sequence_widget') and hasattr(self.sequence_widget, 'add_track_button'):
+            self.sequence_widget.add_track_button.setStyleSheet(button_small_style)
+        
+        # 标签样式
+        label_style = theme.get_style("label")
+        if hasattr(self, 'status_info_label'):
+            self.status_info_label.setStyleSheet(label_style)
+        if hasattr(self, 'volume_label'):
+            self.volume_label.setStyleSheet(label_style)
+        
+        # 滑块样式
+        if hasattr(self, 'volume_slider'):
+            self.volume_slider.setStyleSheet(theme.get_style("slider"))
+        
+        # 输入框样式
+        if hasattr(self, 'bpm_spinbox'):
+            # SpinBox使用类似LineEdit的样式
+            self.bpm_spinbox.setStyleSheet(theme.get_style("line_edit"))
+        
+        # 属性面板
+        if hasattr(self, 'property_dock'):
+            self.property_dock.setStyleSheet(theme.get_style("dialog"))
+    
+    
+    def init_default_tracks(self):
+        """初始化默认轨道（可选，现在不自动创建）"""
+        # 不再自动创建默认音轨，让用户手动创建
+        # 如果需要默认音轨，可以取消下面的注释
+        pass
+        
+        # 如果需要默认音轨，使用以下代码：
+        # from core.models import WaveformType, TrackType
+        # 
+        # # 主旋律
+        # melody_track = self.sequencer.add_track(
+        #     name="主旋律",
+        #     waveform=WaveformType.SQUARE,
+        #     track_type=TrackType.NOTE_TRACK
+        # )
+        # 
+        # # 低音
+        # bass_track = self.sequencer.add_track(
+        #     name="低音",
+        #     waveform=WaveformType.TRIANGLE,
+        #     track_type=TrackType.NOTE_TRACK
+        # )
+        # 
+        # # 打击乐
+        # drum_track = self.sequencer.add_track(
+        #     name="打击乐",
+        #     track_type=TrackType.DRUM_TRACK
+        # )
+    
+    def connect_signals(self):
+        """连接信号"""
+        # 统一编辑器信号
+        self.unified_editor.add_melody_note.connect(self.on_add_melody_note)
+        self.unified_editor.add_bass_event.connect(self.on_add_bass_event)
+        self.unified_editor.add_drum_event.connect(self.on_add_drum_event)
+        
+        # 序列编辑器信号
+        self.sequence_widget.note_clicked.connect(self.on_note_selected)
+        self.sequence_widget.note_position_changed.connect(self.on_note_position_changed)
+        self.sequence_widget.note_deleted.connect(self.on_note_deleted)
+        self.sequence_widget.notes_deleted.connect(self.on_notes_deleted)
+        
+        # 属性面板信号
+        self.property_panel.property_changed.connect(self.on_property_changed)
+        self.property_panel.property_update_requested.connect(self.on_property_update_requested)
+        self.property_panel.batch_property_changed.connect(self.on_batch_property_changed)
+        self.property_panel.track_property_changed.connect(self.on_track_property_changed)
+        
+        # 序列编辑器选择变化信号
+        self.sequence_widget.selection_changed.connect(self.on_selection_changed)
+        self.sequence_widget.track_clicked.connect(self.on_track_clicked)
+        self.sequence_widget.track_enabled_changed.connect(self.on_track_enabled_changed)
+        self.sequence_widget.playhead_time_changed.connect(self.on_playhead_time_changed)
+        
+        # 音轨删除信号
+        self.sequence_widget.track_deleted.connect(self.on_track_deleted)
+    
+    def on_playhead_time_changed(self, time: float):
+        """播放线时间改变（用户拖动进度条时）"""
+        # 如果正在播放，停止播放
+        if self.sequencer.playback_state.is_playing:
+            self.sequencer.stop()
+            self.metronome_widget.set_playing(False)
+            self.statusBar().showMessage("已停止播放")
+        
+        # 更新播放头位置
+        self.sequence_widget.set_playhead_time(time)
+        
+        # 更新播放开始偏移（用于下次播放时从正确位置开始）
+        self.playback_start_offset = time
+    
+    def refresh_ui(self, preserve_selection: bool = False):
+        """刷新UI显示
+        
+        Args:
+            preserve_selection: 是否保持选中状态（用于属性面板更新时）
+        """
+        # 更新序列编辑器
+        self.sequence_widget.set_tracks(self.sequencer.project.tracks, preserve_selection=preserve_selection)
+        self.sequence_widget.set_bpm(self.sequencer.get_bpm())
+        
+        # 更新进度条的总时长
+        if hasattr(self.sequence_widget, 'progress_bar'):
+            total_duration = self.sequencer.project.get_total_duration()
+            self.sequence_widget.progress_bar.set_total_time(total_duration)
+        
+        # 更新统一编辑器BPM
+        self.unified_editor.set_bpm(self.sequencer.get_bpm())
+    
+    def on_add_melody_note(self, pitch: int, duration_beats: float, waveform, target_track=None, insert_mode="sequential"):
+        """添加主旋律音符"""
+        # 确定目标音轨
+        if target_track is not None and target_track.track_type == TrackType.NOTE_TRACK:
+            melody_track = target_track
+        else:
+            # 如果没有指定音轨，找到第一个音符音轨
+            melody_track = None
+            for track in self.sequencer.project.tracks:
+                if track.track_type == TrackType.NOTE_TRACK:
+                    melody_track = track
+                    break
+            
+            if not melody_track:
+                # 如果没有音符音轨，创建一个
+                melody_track = self.sequencer.add_track(
+                    name="音轨 1",
+                    track_type=TrackType.NOTE_TRACK
+                )
+                self.refresh_ui()
+        
+        # 计算开始时间
+        duration = duration_beats * 60.0 / self.sequencer.get_bpm()
+        
+        if insert_mode == "playhead":
+            # 播放线插入模式：使用播放线位置
+            start_time = self.sequence_widget.playhead_time
+        else:
+            # 顺序插入模式：序列末尾
+            if melody_track.notes:
+                last_end_time = max(note.end_time for note in melody_track.notes)
+                start_time = last_end_time
+            else:
+                start_time = 0.0
+        
+        # 检查是否与现有音符重叠（如果重叠，移动到下一个位置）
+        for existing_note in melody_track.notes:
+            if (start_time < existing_note.end_time and 
+                start_time + duration > existing_note.start_time):
+                start_time = existing_note.end_time
+                break
+        
+        # 添加音符
+        note = self.sequencer.add_note(
+            melody_track,
+            pitch,
+            start_time,
+            duration
+        )
+        note.waveform = waveform
+        
+        # 高亮显示目标音轨
+        self.sequence_widget.set_highlighted_track(melody_track)
+        
+        self.refresh_ui()
+        note_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        octave = pitch // 12 - 1
+        note_name = note_names[pitch % 12]
+        self.statusBar().showMessage(f"已添加音符: {note_name}{octave} ({duration_beats}拍)")
+    
+    
+    def on_add_bass_event(self, pitch: int, duration_beats: float, waveform, target_track=None, insert_mode="sequential"):
+        """添加低音事件"""
+        # 确定目标音轨
+        if target_track is not None and target_track.track_type == TrackType.NOTE_TRACK:
+            bass_track = target_track
+        else:
+            # 如果没有指定音轨，找到第一个音符音轨
+            bass_track = None
+            for track in self.sequencer.project.tracks:
+                if track.track_type == TrackType.NOTE_TRACK:
+                    bass_track = track
+                    break
+            
+            if not bass_track:
+                # 如果没有音符音轨，创建一个
+                bass_track = self.sequencer.add_track(
+                    name="音轨 1",
+                    track_type=TrackType.NOTE_TRACK
+                )
+                self.refresh_ui()
+        
+        # 计算开始时间
+        duration = duration_beats * 60.0 / self.sequencer.get_bpm()
+        
+        if insert_mode == "playhead":
+            # 播放线插入模式：使用播放线位置
+            start_time = self.sequence_widget.playhead_time
+        else:
+            # 顺序插入模式：序列末尾
+            if bass_track.notes:
+                last_end_time = max(note.end_time for note in bass_track.notes)
+                start_time = last_end_time
+            else:
+                start_time = 0.0
+        
+        # 检查重叠（如果重叠，移动到下一个位置）
+        for existing_note in bass_track.notes:
+            if (start_time < existing_note.end_time and 
+                start_time + duration > existing_note.start_time):
+                start_time = existing_note.end_time
+                break
+        
+        # 添加音符
+        note = self.sequencer.add_note(
+            bass_track,
+            pitch,
+            start_time,
+            duration
+        )
+        note.waveform = waveform
+        
+        # 高亮显示目标音轨
+        self.sequence_widget.set_highlighted_track(bass_track)
+        
+        self.refresh_ui()
+        note_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        octave = pitch // 12 - 1
+        note_name = note_names[pitch % 12]
+        self.statusBar().showMessage(f"已添加音符: {note_name}{octave} ({duration_beats}拍)")
+    
+    def on_add_drum_event(self, drum_type, duration_beats: float, target_track=None, insert_mode="sequential"):
+        """添加打击乐事件"""
+        # 确定目标音轨
+        if target_track is not None and target_track.track_type == TrackType.DRUM_TRACK:
+            drum_track = target_track
+        else:
+            # 如果没有指定音轨，找到第一个打击乐音轨
+            drum_track = None
+            for track in self.sequencer.project.tracks:
+                if track.track_type == TrackType.DRUM_TRACK:
+                    drum_track = track
+                    break
+            
+            if not drum_track:
+                # 如果没有打击乐轨道，创建一个
+                drum_track = self.sequencer.add_track(name="打击乐", track_type=TrackType.DRUM_TRACK)
+                self.refresh_ui()
+        
+        # 计算开始节拍位置
+        if insert_mode == "playhead":
+            # 播放线插入模式：使用播放线位置
+            start_beat = self.sequence_widget.playhead_time * self.sequencer.get_bpm() / 60.0
+        else:
+            # 顺序插入模式：序列末尾
+            if drum_track.drum_events:
+                last_end_beat = max(event.end_beat for event in drum_track.drum_events)
+                start_beat = last_end_beat
+            else:
+                start_beat = 0.0
+        
+        # 检查重叠（如果重叠，移动到下一个位置）
+        for existing_event in drum_track.drum_events:
+            if (start_beat < existing_event.end_beat and 
+                start_beat + duration_beats > existing_event.start_beat):
+                start_beat = existing_event.end_beat
+                break
+        
+        # 添加打击乐事件
+        drum_event = self.sequencer.add_drum_event(
+            drum_track,
+            drum_type,
+            start_beat,
+            duration_beats
+        )
+        
+        # 高亮显示目标音轨
+        self.sequence_widget.set_highlighted_track(drum_track)
+        
+        self.refresh_ui()
+        drum_names = {
+            DrumType.KICK: "底鼓",
+            DrumType.SNARE: "军鼓",
+            DrumType.HIHAT: "踩镲",
+            DrumType.CRASH: "吊镲"
+        }
+        self.statusBar().showMessage(f"已添加打击乐: {drum_names.get(drum_type, '打击')} ({duration_beats}拍)")
+    
+    def on_note_selected(self, note, track):
+        """音符选中"""
+        self.selected_note = note
+        self.selected_track = track
+        
+        # 更新属性面板
+        self.property_panel.set_note(note, track)
+        
+        note_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        octave = note.pitch // 12 - 1
+        note_name = note_names[note.pitch % 12]
+        self.statusBar().showMessage(f"已选中音符: {note_name}{octave} (按Delete键删除)")
+    
+    def on_note_deleted(self, note, track):
+        """音符被删除（单个，通过命令系统）"""
+        # 检查音符是否还在轨道中（可能已经被widget删除了）
+        if note in track.notes:
+            # 通过命令系统删除音符（支持撤销/重做）
+            self.sequencer.remove_note(track, note, use_command=True)
+        
+        self.refresh_ui()
+        note_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        octave = note.pitch // 12 - 1
+        note_name = note_names[note.pitch % 12]
+        self.statusBar().showMessage(f"已删除音符: {note_name}{octave}")
+    
+    def on_notes_deleted(self, notes_and_tracks):
+        """批量删除音符（通过命令系统）"""
+        from core.command import BatchCommand, DeleteNoteCommand
+        from PyQt5.QtCore import QTimer
+        
+        if not notes_and_tracks:
+            return
+        
+        # 创建批量删除命令
+        commands = []
+        for note, track in notes_and_tracks:
+            # 检查音符是否还在轨道中
+            if note in track.notes:
+                command = DeleteNoteCommand(self.sequencer, track, note)
+                commands.append(command)
+        
+        if commands:
+            # 执行批量命令
+            batch_command = BatchCommand(commands, f"批量删除 {len(commands)} 个音符")
+            self.sequencer.command_history.execute_command(batch_command)
+            
+            # 延迟刷新，确保所有删除操作完成，避免在删除过程中访问已删除的对象
+            QTimer.singleShot(50, lambda: self.refresh_ui())
+            self.statusBar().showMessage(f"已删除 {len(commands)} 个音符")
+    
+    def on_note_position_changed(self, note, track, old_start_time, new_start_time):
+        """音符位置改变"""
+        # 通过命令系统移动音符（支持撤销/重做）
+        # 注意：note.start_time已经在grid_sequence_widget中更新了
+        # 但我们需要通过命令系统来记录这个操作
+        if abs(old_start_time - new_start_time) > 0.001:
+            # 先恢复旧位置（因为widget已经更新了，需要恢复）
+            note.start_time = old_start_time
+            # 通过命令系统移动
+            self.sequencer.move_note(track, note, new_start_time)
+        
+        self.statusBar().showMessage(f"音符已移动到: {new_start_time:.2f}s")
+        self.refresh_ui()
+    
+    def on_property_changed(self, note: Note, track: Track):
+        """属性面板属性改变"""
+        # 通过命令系统修改音符属性（支持撤销/重做）
+        # 获取当前属性值
+        kwargs = {}
+        if hasattr(self.property_panel, 'pitch_spinbox'):
+            new_pitch = self.property_panel.pitch_spinbox.value()
+            if new_pitch != note.pitch:
+                kwargs['pitch'] = new_pitch
+        
+        if hasattr(self.property_panel, 'duration_spinbox'):
+            duration_beats = self.property_panel.duration_spinbox.value()
+            duration_seconds = duration_beats * 60.0 / self.sequencer.get_bpm()
+            if abs(duration_seconds - note.duration) > 0.001:
+                kwargs['duration'] = duration_seconds
+        
+        if hasattr(self.property_panel, 'velocity_slider'):
+            new_velocity = self.property_panel.velocity_slider.value()
+            if new_velocity != note.velocity:
+                kwargs['velocity'] = new_velocity
+        
+        if hasattr(self.property_panel, 'waveform_combo'):
+            waveform_map = {
+                0: WaveformType.SQUARE,
+                1: WaveformType.TRIANGLE,
+                2: WaveformType.SAWTOOTH,
+                3: WaveformType.SINE,
+                4: WaveformType.NOISE
+            }
+            new_waveform = waveform_map.get(self.property_panel.waveform_combo.currentIndex(), WaveformType.SQUARE)
+            if new_waveform != note.waveform:
+                kwargs['waveform'] = new_waveform
+        
+        if hasattr(self.property_panel, 'attack_spinbox') and note.adsr:
+            adsr_changed = False
+            adsr_dict = {}
+            if abs(self.property_panel.attack_spinbox.value() - note.adsr.attack) > 0.001:
+                adsr_dict['attack'] = self.property_panel.attack_spinbox.value()
+                adsr_changed = True
+            if abs(self.property_panel.decay_spinbox.value() - note.adsr.decay) > 0.001:
+                adsr_dict['decay'] = self.property_panel.decay_spinbox.value()
+                adsr_changed = True
+            if abs(self.property_panel.sustain_spinbox.value() - note.adsr.sustain) > 0.001:
+                adsr_dict['sustain'] = self.property_panel.sustain_spinbox.value()
+                adsr_changed = True
+            if abs(self.property_panel.release_spinbox.value() - note.adsr.release) > 0.001:
+                adsr_dict['release'] = self.property_panel.release_spinbox.value()
+                adsr_changed = True
+            if adsr_changed:
+                kwargs['adsr'] = adsr_dict
+        
+        # 如果有属性改变，通过命令系统修改
+        if kwargs:
+            # 处理时长改变时的后续音符调整
+            if 'duration' in kwargs:
+                old_duration = note.duration
+                new_duration = kwargs['duration']
+                duration_delta = new_duration - old_duration
+                
+                # 先通过命令修改当前音符
+                self.sequencer.modify_note(track, note, **kwargs)
+                
+                # 然后调整后续音符（也需要通过命令，但为了简化，这里直接调整）
+                # 注意：后续音符的调整应该也通过命令，但为了简化，这里先直接调整
+                if abs(duration_delta) > 0.001:
+                    adjusted_notes = self.property_panel.adjust_following_notes(duration_delta)
+                    # TODO: 后续音符的调整也应该通过命令系统
+            else:
+                self.sequencer.modify_note(track, note, **kwargs)
+        
+        # 刷新显示（属性改变需要刷新以反映变化）
+        self.refresh_ui(preserve_selection=True)
+        
+        # 更新属性面板显示（以防有变化）
+        if self.property_panel.current_note == note:
+            self.property_panel.update_ui()
+    
+    def on_property_update_requested(self, note: Note, track: Track):
+        """属性面板请求更新UI"""
+        self.refresh_ui()
+    
+    def on_selection_changed(self):
+        """序列编辑器选择变化"""
+        selected_blocks = [item for item in self.sequence_widget.scene.selectedItems() 
+                          if hasattr(item, 'item') and hasattr(item, 'track')]
+        
+        # 如果当前正在编辑音轨（current_track_for_edit不为None）
+        if self.property_panel.current_track_for_edit is not None:
+            # 检查选中的音符是否都在当前编辑的音轨上
+            current_track = self.property_panel.current_track_for_edit
+            all_in_current_track = True
+            if selected_blocks:
+                for block in selected_blocks:
+                    if id(block.track) != id(current_track):
+                        all_in_current_track = False
+                        break
+            
+            # 如果所有选中的音符都在当前音轨上，只更新current_notes，不改变显示模式
+            if all_in_current_track:
+                if selected_blocks:
+                    notes_and_tracks = [(block.item, block.track) for block in selected_blocks]
+                    # 只更新current_notes，不改变显示
+                    self.property_panel.current_notes = notes_and_tracks
+                    # 更新多选标签
+                    if self.property_panel.multi_select_label.isVisible():
+                        track = self.property_panel.current_track_for_edit
+                        if track.track_type == TrackType.DRUM_TRACK:
+                            self.property_panel.multi_select_label.setText(
+                                f"音轨: {track.name}\n已选中 {len(notes_and_tracks)} 个打击乐事件\n（打击乐事件暂不支持批量编辑）"
+                            )
+                        else:
+                            self.property_panel.multi_select_label.setText(
+                                f"音轨: {track.name}\n已选中 {len(notes_and_tracks)} 个音符\n可以统一编辑共有属性"
+                            )
+                return
+            else:
+                # 选中了其他音轨的音符，退出音轨编辑模式
+                self.property_panel.current_track_for_edit = None
+        
+        # 不在音轨编辑模式，正常处理选择变化
+        if len(selected_blocks) == 0:
+            # 没有选中，清空属性面板
+            self.property_panel.set_note(None, None)
+        elif len(selected_blocks) == 1:
+            # 单个选中，显示单个音符编辑
+            block = selected_blocks[0]
+            self.property_panel.set_note(block.item, block.track)
+        else:
+            # 多选，显示批量编辑
+            notes_and_tracks = [(block.item, block.track) for block in selected_blocks]
+            self.property_panel.set_notes(notes_and_tracks)
+    
+    def on_batch_property_changed(self, notes_and_tracks: list):
+        """批量属性改变"""
+        if not notes_and_tracks:
+            return
+        
+        # 获取要修改的属性
+        kwargs = {}
+        
+        # 波形（从批量编辑获取）
+        if hasattr(self.property_panel, 'batch_waveform_combo'):
+            waveform_map = {
+                0: WaveformType.SQUARE,
+                1: WaveformType.TRIANGLE,
+                2: WaveformType.SAWTOOTH,
+                3: WaveformType.SINE,
+                4: WaveformType.NOISE
+            }
+            selected_waveform = waveform_map.get(self.property_panel.batch_waveform_combo.currentIndex())
+            if selected_waveform:
+                kwargs['waveform'] = selected_waveform
+        
+        # 力度
+        if hasattr(self.property_panel, 'batch_velocity_slider'):
+            velocity = self.property_panel.batch_velocity_slider.value()
+            kwargs['velocity'] = velocity
+        
+        # 占空比
+        if hasattr(self.property_panel, 'batch_duty_spinbox'):
+            duty_cycle = self.property_panel.batch_duty_spinbox.value()
+            kwargs['duty_cycle'] = duty_cycle
+        
+        # 通过命令系统批量修改
+        if kwargs:
+            self.sequencer.batch_modify_notes(notes_and_tracks, **kwargs)
+            # 刷新显示（批量修改需要刷新以反映变化）
+            self.refresh_ui(preserve_selection=True)
+            self.statusBar().showMessage(f"已批量修改 {len(notes_and_tracks)} 个音符的属性")
+    
+    def on_track_clicked(self, track: Track):
+        """音轨被点击"""
+        # 先设置属性面板为音轨编辑模式（这会显示音轨效果和批量编辑）
+        self.property_panel.set_track(track)
+        
+        # 选中该轨道上的所有音符（这可能会触发on_selection_changed，但set_track已经设置了正确的显示）
+        self.sequence_widget.select_track_notes(track)
+        
+        # 设置统一编辑器的目标音轨
+        self.unified_editor.set_selected_track(track)
+        
+        # 高亮显示目标音轨
+        self.sequence_widget.set_highlighted_track(track)
+        
+        # 确保属性面板保持音轨编辑模式（防止on_selection_changed覆盖）
+        # 注意：set_track已经在上面调用了，这里再次调用以确保显示正确
+        self.property_panel.set_track(track)
+        
+        note_count = len(track.notes) if track.track_type == TrackType.NOTE_TRACK else len(track.drum_events)
+        self.statusBar().showMessage(f"已选中音轨: {track.name} ({note_count} 个音符/事件)")
+    
+    def on_track_property_changed(self, track: Track):
+        """音轨属性改变"""
+        # 刷新UI以反映音轨属性的变化（如名称、类型等）
+        self.refresh_ui(preserve_selection=True)
+        self.statusBar().showMessage(f"已更新音轨: {track.name}")
+    
+    def on_track_deleted(self, track: Track):
+        """音轨被删除"""
+        from core.command import DeleteTrackCommand
+        from PyQt5.QtWidgets import QMessageBox
+        
+        # 确认删除
+        reply = QMessageBox.question(
+            self, "确认删除", 
+            f"确定要删除音轨 \"{track.name}\" 吗？\n此操作将删除该音轨上的所有音符。",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            # 使用命令系统删除音轨（支持撤销/重做）
+            command = DeleteTrackCommand(self.sequencer, track)
+            self.sequencer.command_history.execute_command(command)
+            
+            # 刷新UI
+            self.refresh_ui()
+            
+            # 清除选中状态
+            self.selected_note = None
+            self.selected_track = None
+            if hasattr(self, 'unified_editor'):
+                self.unified_editor.set_selected_track(None)
+            
+            self.statusBar().showMessage(f"已删除音轨: {track.name}")
+    
+    def clear_all_tracks(self):
+        """清空所有音轨"""
+        from PyQt5.QtWidgets import QMessageBox
+        from core.command import BatchCommand, DeleteTrackCommand
+        
+        if not self.sequencer.project.tracks:
+            self.statusBar().showMessage("没有可清空的音轨")
+            return
+        
+        # 确认清空
+        reply = QMessageBox.question(
+            self, "确认清空", 
+            f"确定要清空所有 {len(self.sequencer.project.tracks)} 个音轨吗？\n此操作将删除所有音轨及其上的所有音符，且无法撤销。",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            # 创建批量删除命令
+            commands = []
+            tracks_to_delete = list(self.sequencer.project.tracks)  # 复制列表，避免在迭代时修改
+            
+            for track in tracks_to_delete:
+                command = DeleteTrackCommand(self.sequencer, track)
+                commands.append(command)
+            
+            if commands:
+                # 执行批量命令
+                batch_command = BatchCommand(commands, f"清空所有音轨 ({len(commands)} 个)")
+                self.sequencer.command_history.execute_command(batch_command)
+                
+                # 刷新UI
+                self.refresh_ui()
+                
+                # 清除选中状态
+                self.selected_note = None
+                self.selected_track = None
+                if hasattr(self, 'unified_editor'):
+                    self.unified_editor.set_selected_track(None)
+                
+                self.statusBar().showMessage(f"已清空所有音轨 ({len(commands)} 个)")
+    
+    def on_track_enabled_changed(self, track: Track, enabled: bool):
+        """音轨启用状态改变"""
+        # 防止在刷新过程中触发（避免循环刷新）
+        if not hasattr(self.sequencer, 'project') or not self.sequencer.project:
+            return
+        
+        track.enabled = enabled
+        # 使用延迟刷新，让当前事件处理完成，避免访问已删除的对象
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(50, self.sequence_widget.refresh)
+        status = "启用" if enabled else "禁用"
+        self.statusBar().showMessage(f"已{status}音轨: {track.name}")
+    
+    def on_metronome_toggled(self, enabled: bool):
+        """节拍器开关"""
+        # 如果正在播放，同步节拍器状态
+        if enabled and self.sequencer.playback_state.is_playing:
+            self.metronome_widget.set_playing(True)
+        elif not enabled:
+            self.metronome_widget.set_playing(False)
+    
+    def toggle_play_pause(self):
+        """切换播放/暂停"""
+        if self.sequencer.playback_state.is_playing:
+            self.stop()
+        else:
+            self.play()
+    
+    def select_all_notes(self):
+        """全选音符"""
+        # 触发序列编辑器的全选
+        if hasattr(self.sequence_widget, 'view'):
+            from PyQt5.QtGui import QKeyEvent
+            fake_event = QKeyEvent(QKeyEvent.KeyPress, Qt.Key_A, Qt.ControlModifier)
+            self.sequence_widget.on_key_press(fake_event)
+    
+    def on_note_added(self, note, track):
+        """音符添加"""
+        self.statusBar().showMessage(f"已添加音符: MIDI {note.pitch}")
+    
+    def on_note_removed(self, note, track):
+        """音符删除"""
+        self.statusBar().showMessage(f"已删除音符")
+    
+    def setup_menu(self):
+        """设置菜单栏"""
+        menubar = self.menuBar()
+        
+        # 文件菜单
+        file_menu = menubar.addMenu("文件(&F)")
+        
+        new_action = QAction("新建(&N)", self)
+        new_action.setShortcut(QKeySequence.New)
+        new_action.triggered.connect(self.new_project)
+        file_menu.addAction(new_action)
+        
+        # 合并打开和导入：根据文件类型自动调用相应函数
+        open_action = QAction("打开/导入(&O)...", self)
+        open_action.setShortcut(QKeySequence.Open)
+        open_action.triggered.connect(self.open_or_import_file)
+        file_menu.addAction(open_action)
+        
+        save_action = QAction("保存(&S)", self)
+        save_action.setShortcut(QKeySequence.Save)
+        save_action.triggered.connect(self.save_project)
+        file_menu.addAction(save_action)
+        
+        # 合并"另存为"和"导出"为一个统一的导出功能
+        export_action = QAction("导出(&E)...", self)
+        export_action.setShortcut(QKeySequence.SaveAs)
+        export_action.triggered.connect(self.export_file)
+        file_menu.addAction(export_action)
+        
+        file_menu.addSeparator()
+        
+        exit_action = QAction("退出(&X)", self)
+        exit_action.setShortcut(QKeySequence.Quit)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+        
+        # 视图菜单
+        view_menu = menubar.addMenu("视图(&V)")
+        
+        # 显示/隐藏属性面板
+        self.toggle_property_action = QAction("属性面板(&P)", self)
+        self.toggle_property_action.setCheckable(True)
+        self.toggle_property_action.setChecked(False)  # 默认不显示
+        self.toggle_property_action.triggered.connect(self.toggle_property_panel)
+        view_menu.addAction(self.toggle_property_action)
+        
+        # 编辑菜单
+        edit_menu = menubar.addMenu("编辑(&E)")
+        
+        # 撤销
+        self.undo_action = QAction("撤销(&U)", self)
+        self.undo_action.setShortcut(QKeySequence.Undo)
+        self.undo_action.triggered.connect(self.undo)
+        self.undo_action.setEnabled(False)
+        edit_menu.addAction(self.undo_action)
+        
+        # 重做
+        self.redo_action = QAction("重做(&R)", self)
+        self.redo_action.setShortcut(QKeySequence.Redo)
+        self.redo_action.triggered.connect(self.redo)
+        self.redo_action.setEnabled(False)
+        edit_menu.addAction(self.redo_action)
+        
+        # 定时更新撤销/重做按钮状态
+        self.update_undo_redo_timer = QTimer()
+        self.update_undo_redo_timer.timeout.connect(self.update_undo_redo_state)
+        self.update_undo_redo_timer.start(100)  # 每100ms更新一次
+        
+        edit_menu.addSeparator()
+        
+        # 全选
+        select_all_action = QAction("全选(&A)", self)
+        select_all_action.setShortcut(QKeySequence.SelectAll)
+        select_all_action.triggered.connect(self.select_all_notes)
+        edit_menu.addAction(select_all_action)
+        
+        # 播放菜单
+        play_menu = menubar.addMenu("播放(&P)")
+        
+        play_pause_action = QAction("播放/暂停", self)
+        play_pause_action.setShortcut(Qt.Key_Space)
+        play_pause_action.triggered.connect(self.toggle_play_pause)
+        play_menu.addAction(play_pause_action)
+        
+        stop_action = QAction("停止(&S)", self)
+        stop_action.setShortcut("Ctrl+.")
+        stop_action.triggered.connect(self.stop)
+        play_menu.addAction(stop_action)
+        
+        # 设置菜单
+        settings_menu = menubar.addMenu("设置(&S)")
+        
+        # 设置对话框
+        settings_action = QAction("设置(&S)...", self)
+        settings_action.triggered.connect(self.show_settings)
+        settings_menu.addAction(settings_action)
+        
+        settings_menu.addSeparator()
+        
+        # 快捷键配置
+        shortcut_action = QAction("快捷键配置(&K)...", self)
+        shortcut_action.triggered.connect(self.show_shortcut_config)
+        settings_menu.addAction(shortcut_action)
+        
+        # 帮助菜单
+        help_menu = menubar.addMenu("帮助(&H)")
+        
+        about_action = QAction("关于(&A)...", self)
+        about_action.triggered.connect(self.show_about)
+        help_menu.addAction(about_action)
+    
+    def setup_toolbar(self):
+        """设置工具栏（已移到右侧面板，这里保留空实现）"""
+        # 播放控制已移到右侧面板
+        pass
+    
+    def setup_statusbar(self):
+        """设置状态栏"""
+        self.statusBar().showMessage("就绪")
+    
+    def new_project(self):
+        """新建项目"""
+        if self.check_unsaved_changes():
+            self.sequencer = Sequencer()
+            self.current_file_path = None
+            self.setWindowTitle("8bit音乐制作器 - 新建项目")
+            self.refresh_ui()
+            self.statusBar().showMessage("已创建新项目")
+    
+    def open_or_import_file(self):
+        """打开或导入文件（根据文件类型自动判断）"""
+        if not self.check_unsaved_changes():
+            return
+        
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "打开/导入文件", "", 
+            "所有支持的文件 (*.json *.mid *.midi);;JSON文件 (*.json);;MIDI文件 (*.mid *.midi);;所有文件 (*.*)"
+        )
+        
+        if not file_path:
+            return
+        
+        # 根据文件扩展名自动判断调用哪个函数
+        file_ext = file_path.lower()
+        if file_ext.endswith('.json'):
+            self.open_project_file(file_path)
+        elif file_ext.endswith('.mid') or file_ext.endswith('.midi'):
+            self.import_midi_file(file_path)
+        else:
+            QMessageBox.warning(self, "警告", f"不支持的文件类型: {file_path}")
+    
+    def open_project_file(self, file_path: str):
+        """打开项目文件"""
+        try:
+            import json
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # 清除属性面板的状态（清除旧的音轨信息）
+            self.property_panel.set_track(None)
+            self.property_panel.set_note(None, None)
+            self.property_panel.set_notes([])
+            
+            project = Project.from_dict(data)
+            self.sequencer.set_project(project)
+            self.current_file_path = file_path
+            self.setWindowTitle(f"8bit音乐制作器 - {project.name}")
+            
+            # 清除选中状态
+            self.selected_note = None
+            self.selected_track = None
+            if hasattr(self, 'unified_editor'):
+                self.unified_editor.set_selected_track(None)
+            
+            # 强制全量刷新UI（清除所有旧的UI元素，确保track引用正确）
+            self.sequence_widget.refresh(force_full_refresh=True)
+            self.refresh_ui()
+            self.statusBar().showMessage(f"已打开项目: {file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"打开项目失败:\n{str(e)}")
+    
+    def open_project(self):
+        """打开项目（保留以兼容旧代码）"""
+        if not self.check_unsaved_changes():
+            return
+        
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "打开项目", "", "JSON文件 (*.json);;所有文件 (*.*)"
+        )
+        
+        if file_path:
+            self.open_project_file(file_path)
+    
+    def save_project(self):
+        """保存项目"""
+        if self.current_file_path:
+            self.save_project_to_file(self.current_file_path)
+        else:
+            # 如果没有保存路径，调用导出功能
+            self.export_file()
+    
+    def export_file(self):
+        """导出文件（统一处理项目保存和音频导出）"""
+        # 文件格式选择对话框
+        file_path, selected_filter = QFileDialog.getSaveFileName(
+            self, "导出文件", "",
+            "JSON项目文件 (*.json);;"
+            "MIDI文件 (*.mid);;"
+            "WAV音频文件 (*.wav);;"
+            "MP3音频文件 (*.mp3);;"
+            "OGG音频文件 (*.ogg);;"
+            "所有文件 (*.*)"
+        )
+        
+        if not file_path:
+            return
+        
+        # 根据选择的过滤器确定文件格式
+        if "JSON" in selected_filter:
+            # 保存为JSON项目文件
+            if not file_path.endswith('.json'):
+                file_path += '.json'
+            self.save_project_to_file(file_path)
+            self.current_file_path = file_path
+        elif "MIDI" in selected_filter:
+            # 导出为MIDI文件
+            if not file_path.lower().endswith('.mid'):
+                file_path += '.mid'
+            self.export_midi_to_file(file_path)
+        elif "WAV" in selected_filter:
+            # 导出为WAV音频文件
+            if not file_path.endswith('.wav'):
+                file_path += '.wav'
+            self.export_audio_to_file(file_path, format="wav")
+        elif "MP3" in selected_filter:
+            # 导出为MP3音频文件
+            if not file_path.endswith('.mp3'):
+                file_path += '.mp3'
+            self.export_audio_to_file(file_path, format="mp3")
+        elif "OGG" in selected_filter:
+            # 导出为OGG音频文件
+            if not file_path.endswith('.ogg'):
+                file_path += '.ogg'
+            self.export_audio_to_file(file_path, format="ogg")
+        else:
+            # 根据文件扩展名自动判断
+            ext = file_path.lower()
+            if ext.endswith('.json'):
+                if not file_path.endswith('.json'):
+                    file_path += '.json'
+                self.save_project_to_file(file_path)
+                self.current_file_path = file_path
+            elif ext.endswith('.mid') or ext.endswith('.midi'):
+                if not file_path.lower().endswith('.mid'):
+                    file_path += '.mid'
+                self.export_midi_to_file(file_path)
+            elif ext.endswith('.wav'):
+                if not file_path.endswith('.wav'):
+                    file_path += '.wav'
+                self.export_audio_to_file(file_path, format="wav")
+            elif ext.endswith('.mp3'):
+                if not file_path.endswith('.mp3'):
+                    file_path += '.mp3'
+                self.export_audio_to_file(file_path, format="mp3")
+            elif ext.endswith('.ogg') or ext.endswith('.oga'):
+                if not file_path.endswith('.ogg'):
+                    file_path += '.ogg'
+                self.export_audio_to_file(file_path, format="ogg")
+            else:
+                # 默认保存为JSON项目文件
+                if not file_path.endswith('.json'):
+                    file_path += '.json'
+                self.save_project_to_file(file_path)
+                self.current_file_path = file_path
+    
+    def save_project_to_file(self, file_path: str):
+        """保存项目到文件"""
+        try:
+            import json
+            data = self.sequencer.project.to_dict()
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            
+            self.setWindowTitle(f"8bit音乐制作器 - {self.sequencer.project.name}")
+            self.statusBar().showMessage(f"项目已保存: {file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"保存项目失败:\n{str(e)}")
+    
+    def export_midi_to_file(self, file_path: str):
+        """导出MIDI文件"""
+        try:
+            from core.midi_io import MidiIO
+            MidiIO.export_midi(self.sequencer.project, file_path)
+            self.statusBar().showMessage(f"已导出MIDI: {file_path}")
+            QMessageBox.information(self, "成功", f"MIDI文件已导出:\n{file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"导出MIDI失败:\n{str(e)}")
+    
+    def export_audio_to_file(self, file_path: str, format: str = "wav"):
+        """导出音频文件"""
+        try:
+            from core.audio_export import AudioExporter
+            
+            # 生成音频
+            audio = self.sequencer.audio_engine.generate_project_audio(
+                self.sequencer.project
+            )
+            
+            if len(audio) == 0:
+                QMessageBox.warning(self, "警告", "项目中没有音频数据")
+                return
+            
+            # 导出音频文件
+            sample_rate = self.sequencer.audio_engine.sample_rate
+            AudioExporter.export_audio(audio, file_path, sample_rate, format=format)
+            
+            self.statusBar().showMessage(f"已导出{format.upper()}: {file_path}")
+            QMessageBox.information(self, "成功", f"{format.upper()}文件已导出:\n{file_path}")
+        except ImportError as e:
+            error_msg = str(e)
+            if "mp3" in format.lower() or "pydub" in error_msg or "ffmpeg" in error_msg or "moviepy" in error_msg:
+                QMessageBox.warning(
+                    self, "缺少依赖",
+                    "导出MP3需要安装以下库之一：\n\n"
+                    "方法1（推荐）：安装moviepy（会自动下载内置ffmpeg）\n"
+                    "  pip install moviepy\n\n"
+                    "方法2：安装pydub并手动安装ffmpeg\n"
+                    "  pip install pydub\n"
+                    "  然后从 https://ffmpeg.org/ 下载安装ffmpeg\n\n"
+                    "或者，您可以使用OGG格式（无需额外依赖）"
+                )
+            elif "soundfile" in error_msg:
+                QMessageBox.warning(
+                    self, "缺少依赖",
+                    "导出OGG需要安装soundfile库。\n\n"
+                    "请运行以下命令安装：\n"
+                    "pip install soundfile"
+                )
+            else:
+                QMessageBox.critical(self, "错误", f"导出失败:\n{error_msg}")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"导出{format.upper()}失败:\n{str(e)}")
+    
+    def import_midi_file(self, file_path: str):
+        """导入MIDI文件"""
+        try:
+            # 检查是否有未保存的更改
+            if not self.check_unsaved_changes():
+                return
+            
+            # 清除属性面板的状态（清除旧的音轨信息）
+            self.property_panel.set_track(None)
+            self.property_panel.set_note(None, None)
+            self.property_panel.set_notes([])
+            
+            # 获取当前选择的默认波形（从统一编辑器）
+            default_waveform = self.unified_editor.selected_waveform
+            
+            # 获取设置
+            from ui.settings_manager import get_settings_manager
+            settings_manager = get_settings_manager()
+            snap_to_beat = settings_manager.is_snap_to_beat_enabled()
+            allow_overlap = settings_manager.is_overlap_allowed()
+            
+            # 导入MIDI文件，使用默认波形和设置
+            project = MidiIO.import_midi(file_path, default_waveform=default_waveform,
+                                        snap_to_beat=snap_to_beat, allow_overlap=allow_overlap)
+            
+            # 设置项目
+            self.sequencer.set_project(project)
+            self.current_file_path = None  # MIDI导入后，项目文件路径为空
+            
+            # 清除选中状态
+            self.selected_note = None
+            self.selected_track = None
+            if hasattr(self, 'unified_editor'):
+                self.unified_editor.set_selected_track(None)
+            
+            # 强制全量刷新UI（清除所有旧的UI元素，确保track引用正确）
+            self.sequence_widget.refresh(force_full_refresh=True)
+            self.refresh_ui()
+            
+            # 更新BPM显示
+            self.bpm_spinbox.setValue(int(project.bpm))
+            
+            self.statusBar().showMessage(f"已导入MIDI: {file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"导入MIDI失败:\n{str(e)}")
+    
+    def import_midi(self):
+        """导入MIDI文件（保留以兼容旧代码）"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "导入MIDI", "", "MIDI文件 (*.mid *.midi);;所有文件 (*.*)"
+        )
+        
+        if file_path:
+            self.import_midi_file(file_path)
+    
+    
+    def play(self):
+        """播放"""
+        # 获取当前播放头位置
+        current_time = self.sequence_widget.playhead_time
+        
+        # 禁用所有预览功能（钢琴键盘、打击乐等）
+        self.unified_editor.set_preview_enabled(False)
+        
+        self.sequencer.play(start_time=current_time)
+        self.statusBar().showMessage("播放中...")
+        
+        # 记录播放开始时间
+        import time
+        self.playback_start_time = time.time()
+        self.playback_start_offset = current_time
+        
+        # 同步节拍器
+        if self.metronome_widget.is_enabled:
+            self.metronome_widget.set_playing(True)
+    
+    def pause(self):
+        """暂停"""
+        if self.sequencer.playback_state.is_playing:
+            self.sequencer.stop()
+            self.statusBar().showMessage("已暂停")
+            # 不重置播放头位置，保持当前位置
+            # 不启用预览功能，保持暂停状态
+            # 同步节拍器
+            self.metronome_widget.set_playing(False)
+    
+    def stop(self):
+        """停止"""
+        self.sequencer.stop()
+        self.statusBar().showMessage("已停止")
+        
+        # 重置播放头到开始位置
+        self.sequence_widget.set_playhead_time(0.0)
+        self.playback_start_time = None
+        
+        # 启用所有预览功能（钢琴键盘、打击乐等）
+        self.unified_editor.set_preview_enabled(True)
+        
+        # 同步节拍器
+        self.metronome_widget.set_playing(False)
+    
+    def on_bpm_changed(self, value: int):
+        """BPM改变"""
+        bpm = float(value)
+        self.sequencer.set_bpm(bpm)
+        self.sequence_widget.set_bpm(bpm)
+        self.unified_editor.set_bpm(bpm)
+        self.property_panel.set_bpm(bpm)
+        self.metronome_widget.set_bpm(bpm)
+        self.refresh_ui()
+    
+    def on_volume_changed(self, value: int):
+        """音量改变（实时更新）"""
+        volume = value / 100.0  # 转换为0.0-1.0
+        self.sequencer.audio_engine.set_master_volume(volume)
+        self.volume_label.setText(f"{value}%")
+    
+    def on_volume_slider_released(self):
+        """播放音量改变（实时更新，不需要重新播放）"""
+        value = self.volume_slider.value()
+        volume = value / 100.0  # 转换为0.0-1.0
+        self.sequencer.audio_engine.set_master_volume(volume)
+        self.volume_label.setText(f"{value}%")
+        # 音量改变实时生效，不需要重新播放
+    
+    def update_playback_status(self):
+        """更新播放状态和播放头"""
+        if self.sequencer.playback_state.is_playing and self.playback_start_time:
+            import time
+            # 计算当前播放时间
+            elapsed_time = time.time() - self.playback_start_time
+            current_time = self.playback_start_offset + elapsed_time
+            
+            # 只有在进度条不在拖动状态时才更新播放头（避免与用户拖动冲突）
+            if hasattr(self.sequence_widget, 'progress_bar'):
+                if not self.sequence_widget.progress_bar.is_dragging:
+                    # 更新播放头
+                    self.sequence_widget.set_playhead_time(current_time)
+                    # 更新进度条的当前时间
+                    self.sequence_widget.progress_bar.set_current_time(current_time)
+            
+            # 确保预览被禁用（防止播放过程中被启用）
+            if self.unified_editor.preview_enabled:
+                self.unified_editor.set_preview_enabled(False)
+            
+            # 检查是否播放完毕（简化：如果播放头超过项目总时长，停止）
+            total_duration = self.sequencer.project.get_total_duration()
+            if current_time >= total_duration:
+                self.stop()
+        elif not self.sequencer.playback_state.is_playing:
+            # 播放停止时，节拍器也停止，并启用预览
+            self.metronome_widget.set_playing(False)
+            # 如果预览被禁用，重新启用
+            if not self.unified_editor.preview_enabled:
+                self.unified_editor.set_preview_enabled(True)
+    
+    def check_unsaved_changes(self) -> bool:
+        """检查未保存的更改（简化实现）"""
+        # 这里可以添加检查逻辑
+        return True
+    
+    def show_about(self):
+        """显示关于对话框"""
+        QMessageBox.about(
+            self,
+            "关于",
+            "8bit音乐制作器 v0.1.0\n\n"
+            "一个功能完备的8bit音乐和音效制作器。\n\n"
+            "使用PyQt5开发。"
+        )
+    
+    def setup_shortcuts(self):
+        """设置快捷键"""
+        # 八度增减快捷键
+        octave_up_seq = self.shortcut_manager.get_key_sequence("octave_up")
+        if octave_up_seq:
+            octave_up_action = QAction(self)
+            octave_up_action.setShortcut(octave_up_seq)
+            octave_up_action.triggered.connect(self.octave_up)
+            self.addAction(octave_up_action)
+        
+        octave_down_seq = self.shortcut_manager.get_key_sequence("octave_down")
+        if octave_down_seq:
+            octave_down_action = QAction(self)
+            octave_down_action.setShortcut(octave_down_seq)
+            octave_down_action.triggered.connect(self.octave_down)
+            self.addAction(octave_down_action)
+        
+        # 删除最后一个音符快捷键
+        delete_last_note_seq = self.shortcut_manager.get_key_sequence("delete_last_note")
+        if delete_last_note_seq:
+            delete_last_note_action = QAction(self)
+            delete_last_note_action.setShortcut(delete_last_note_seq)
+            delete_last_note_action.triggered.connect(self.delete_last_note)
+            self.addAction(delete_last_note_action)
+        
+        # 将快捷键管理器传递给子组件
+        if hasattr(self, 'unified_editor'):
+            self.unified_editor.setup_shortcuts(self.shortcut_manager)
+            # 更新钢琴键盘按钮文本显示快捷键
+            if hasattr(self.unified_editor, 'piano_keyboard'):
+                self.unified_editor.piano_keyboard.update_button_texts()
+    
+    def octave_up(self):
+        """增加一度（八度）"""
+        if hasattr(self, 'unified_editor') and hasattr(self.unified_editor, 'piano_keyboard'):
+            current_octave = self.unified_editor.piano_keyboard.current_octave
+            if current_octave < 8:
+                self.unified_editor.piano_keyboard.on_octave_changed(current_octave + 1)
+    
+    def octave_down(self):
+        """减少一度（八度）"""
+        if hasattr(self, 'unified_editor') and hasattr(self.unified_editor, 'piano_keyboard'):
+            current_octave = self.unified_editor.piano_keyboard.current_octave
+            if current_octave > 0:
+                self.unified_editor.piano_keyboard.on_octave_changed(current_octave - 1)
+    
+    def delete_last_note(self):
+        """删除当前音轨上的最后一个音符"""
+        from core.models import TrackType
+        
+        # 确定目标音轨
+        target_track = None
+        
+        # 优先使用统一编辑器选中的音轨
+        if hasattr(self, 'unified_editor') and hasattr(self.unified_editor, 'selected_track'):
+            if self.unified_editor.selected_track and self.unified_editor.selected_track.track_type == TrackType.NOTE_TRACK:
+                target_track = self.unified_editor.selected_track
+        
+        # 如果没有选中的音轨，使用第一个音符音轨
+        if target_track is None:
+            for track in self.sequencer.project.tracks:
+                if track.track_type == TrackType.NOTE_TRACK and track.notes:
+                    target_track = track
+                    break
+        
+        # 如果没有找到音轨或音轨没有音符
+        if target_track is None or not target_track.notes:
+            self.statusBar().showMessage("没有可删除的音符")
+            return
+        
+        # 找到最后一个音符（end_time最大的，如果有多个，选择start_time最大的）
+        last_note = None
+        max_end_time = -1
+        max_start_time = -1
+        
+        for note in target_track.notes:
+            end_time = note.end_time
+            if end_time > max_end_time or (end_time == max_end_time and note.start_time > max_start_time):
+                max_end_time = end_time
+                max_start_time = note.start_time
+                last_note = note
+        
+        if last_note:
+            # 使用命令系统删除音符（支持撤销/重做）
+            self.sequencer.remove_note(target_track, last_note, use_command=True)
+            self.refresh_ui()
+            
+            # 显示提示信息
+            note_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+            octave = last_note.pitch // 12 - 1
+            note_name = note_names[last_note.pitch % 12]
+            self.statusBar().showMessage(f"已删除最后一个音符: {note_name}{octave} (音轨: {target_track.name})")
+        else:
+            self.statusBar().showMessage("没有找到可删除的音符")
+    
+    def show_settings(self):
+        """显示设置对话框"""
+        from ui.settings_dialog import SettingsDialog
+        dialog = SettingsDialog(self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.statusBar().showMessage("设置已更新")
+    
+    def show_shortcut_config(self):
+        """显示快捷键配置对话框"""
+        dialog = ShortcutConfigDialog(self)
+        if dialog.exec_() == QDialog.Accepted:
+            # 重新设置快捷键
+            self.setup_shortcuts()
+            if hasattr(self, 'unified_editor'):
+                self.unified_editor.setup_shortcuts(self.shortcut_manager)
+                # 更新钢琴键盘按钮文本
+                if hasattr(self.unified_editor, 'piano_keyboard'):
+                    self.unified_editor.piano_keyboard.update_button_texts()
+            self.statusBar().showMessage("快捷键配置已更新")
+    
+    def keyPressEvent(self, event):
+        """全局键盘事件"""
+        # 空格键：播放/暂停（除非焦点在输入框中）
+        if event.key() == Qt.Key_Space:
+            focus_widget = self.focusWidget()
+            # 如果焦点在输入框、SpinBox等可编辑控件上，不处理空格键
+            if not isinstance(focus_widget, (QSpinBox,)):
+                self.toggle_play_pause()
+                event.accept()
+                return
+        
+        # 其他按键传递给默认处理
+        super().keyPressEvent(event)
+    
+    def toggle_property_panel(self, visible: bool):
+        """切换属性面板的显示/隐藏"""
+        self.property_dock.setVisible(visible)
+    
+    def undo(self):
+        """撤销操作"""
+        description = self.sequencer.undo()
+        if description:
+            self.statusBar().showMessage(f"已撤销: {description}")
+            self.refresh_ui()
+        else:
+            self.statusBar().showMessage("无法撤销")
+    
+    def redo(self):
+        """重做操作"""
+        description = self.sequencer.redo()
+        if description:
+            self.statusBar().showMessage(f"已重做: {description}")
+            self.refresh_ui()
+        else:
+            self.statusBar().showMessage("无法重做")
+    
+    def update_undo_redo_state(self):
+        """更新撤销/重做按钮状态"""
+        self.undo_action.setEnabled(self.sequencer.can_undo())
+        self.redo_action.setEnabled(self.sequencer.can_redo())
+    
+    def on_add_track_clicked(self):
+        """添加音轨按钮点击"""
+        from core.models import WaveformType
+        from PyQt5.QtWidgets import QLineEdit
+        
+        # 创建对话框
+        dialog = QDialog(self)
+        dialog.setWindowTitle("添加音轨")
+        dialog.setMinimumWidth(300)
+        
+        layout = QVBoxLayout()
+        dialog.setLayout(layout)
+        
+        # 音轨名称输入
+        layout.addWidget(QLabel("音轨名称:"))
+        name_input = QLineEdit()
+        name_input.setPlaceholderText("请输入音轨名称")
+        name_input.setText(f"音轨 {len(self.sequencer.project.tracks) + 1}")
+        layout.addWidget(name_input)
+        
+        # 音轨类型选择
+        layout.addWidget(QLabel("音轨类型:"))
+        track_type_combo = QComboBox()
+        track_type_combo.addItems(["音符音轨", "打击乐音轨"])
+        layout.addWidget(track_type_combo)
+        
+        # 按钮
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+        
+        if dialog.exec_() == QDialog.Accepted:
+            track_name = name_input.text().strip()
+            if not track_name:
+                track_name = f"音轨 {len(self.sequencer.project.tracks) + 1}"
+            
+            track_type = TrackType.NOTE_TRACK if track_type_combo.currentIndex() == 0 else TrackType.DRUM_TRACK
+            
+            track = self.sequencer.add_track(
+                name=track_name,
+                track_type=track_type
+            )
+            
+            self.refresh_ui()
+            self.statusBar().showMessage(f"已添加音轨: {track.name}")
+    
+    def closeEvent(self, event):
+        """窗口关闭事件"""
+        if self.check_unsaved_changes():
+            self.sequencer.cleanup()
+            event.accept()
+        else:
+            event.ignore()
+
