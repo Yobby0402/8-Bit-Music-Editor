@@ -62,7 +62,30 @@ class MidiIO:
             # 尝试从轨道名称消息中获取名称
             for msg in midi_track:
                 if msg.type == 'track_name':
-                    track_name = msg.name
+                    # 尝试多种编码方式处理轨道名称，避免乱码
+                    try:
+                        # mido库返回的name可能是bytes或str
+                        if isinstance(msg.name, bytes):
+                            # 尝试UTF-8解码
+                            try:
+                                track_name = msg.name.decode('utf-8')
+                            except UnicodeDecodeError:
+                                # 如果UTF-8失败，尝试latin-1（MIDI标准编码）
+                                try:
+                                    track_name = msg.name.decode('latin-1')
+                                except UnicodeDecodeError:
+                                    # 如果都失败，尝试GBK（中文Windows常用编码）
+                                    try:
+                                        track_name = msg.name.decode('gbk')
+                                    except UnicodeDecodeError:
+                                        # 最后尝试使用错误处理
+                                        track_name = msg.name.decode('utf-8', errors='replace')
+                        else:
+                            # 已经是字符串，直接使用
+                            track_name = msg.name
+                    except Exception:
+                        # 如果处理失败，使用默认名称
+                        track_name = f"轨道 {track_index + 1}"
                     break
             
             track = Track(
@@ -221,8 +244,10 @@ class MidiIO:
             midi_track = MidiTrack()
             mid.tracks.append(midi_track)
             
-            # 设置轨道名称
-            midi_track.append(MetaMessage('track_name', name=track.name, time=0))
+            # 设置轨道名称（处理中文字符编码问题）
+            # mido库使用latin-1编码，需要将非ASCII字符转换为ASCII兼容字符串
+            safe_track_name = MidiIO._encode_track_name(track.name)
+            midi_track.append(MetaMessage('track_name', name=safe_track_name, time=0))
             
             # 设置tempo（只在第一个轨道设置）
             if mid.tracks.index(midi_track) == 0:
@@ -295,4 +320,59 @@ class MidiIO:
                 msg = Message('note_off', note=event['note'], velocity=0, time=delta_tick)
             
             midi_track.append(msg)
+    
+    @staticmethod
+    def _encode_track_name(name: str) -> str:
+        """
+        将轨道名称编码为MIDI兼容的字符串
+        
+        MIDI规范使用latin-1编码（ISO-8859-1），只能表示0-255的字符。
+        对于无法编码的字符（如中文），使用ASCII替代方案。
+        
+        Args:
+            name: 原始轨道名称
+            
+        Returns:
+            编码后的轨道名称（ASCII兼容）
+        """
+        try:
+            # 尝试使用latin-1编码
+            name.encode('latin-1')
+            return name
+        except UnicodeEncodeError:
+            # 如果包含非latin-1字符，使用ASCII替代
+            # 方案1：使用拼音映射（简单实现）
+            # 方案2：使用Unicode转义（不推荐，不兼容）
+            # 方案3：使用ASCII替代字符（推荐）
+            
+            # 简单映射常见中文字符到ASCII
+            chinese_to_ascii = {
+                '主旋律': 'Melody',
+                '低音': 'Bass',
+                '打击乐': 'Drums',
+                '轨道': 'Track',
+                '音轨': 'Track',
+            }
+            
+            # 检查是否是完全匹配的中文名称
+            if name in chinese_to_ascii:
+                return chinese_to_ascii[name]
+            
+            # 否则，尝试将中文字符替换为拼音或使用Unicode转义
+            # 为了兼容性，我们使用简单的ASCII替代
+            # 将非ASCII字符替换为下划线或移除
+            ascii_name = ''
+            for char in name:
+                try:
+                    char.encode('latin-1')
+                    ascii_name += char
+                except UnicodeEncodeError:
+                    # 非ASCII字符替换为下划线
+                    ascii_name += '_'
+            
+            # 如果结果为空，使用默认名称
+            if not ascii_name or ascii_name == '_' * len(name):
+                return f"Track_{hash(name) % 10000}"
+            
+            return ascii_name
 

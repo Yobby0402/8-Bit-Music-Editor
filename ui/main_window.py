@@ -8,10 +8,12 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QMenuBar, QMenu, QToolBar, QStatusBar, QAction,
     QMessageBox, QFileDialog, QSplitter, QDialog,
-    QDockWidget, QSlider, QDialogButtonBox, QLabel, QComboBox, QApplication, QDesktopWidget
+    QDockWidget, QSlider, QDialogButtonBox, QLabel, QComboBox, QApplication, QDesktopWidget,
+    QProgressDialog
 )
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QIcon, QKeySequence, QKeyEvent
+from PyQt5.QtCore import Qt, QTimer, QSettings
+from PyQt5.QtGui import QIcon, QKeySequence, QKeyEvent, QFont
+import os
 
 from core.sequencer import Sequencer
 from core.models import Project, WaveformType, Track, Note, TrackType
@@ -23,6 +25,7 @@ from ui.grid_sequence_widget import GridSequenceWidget
 from ui.timeline_widget import TimelineWidget
 from ui.property_panel_widget import PropertyPanelWidget
 from ui.metronome_widget import MetronomeWidget
+from ui.oscilloscope_widget import OscilloscopeWidget
 from ui.theme import theme_manager
 from ui.shortcut_manager import get_shortcut_manager
 from ui.shortcut_config_dialog import ShortcutConfigDialog
@@ -37,7 +40,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         
         self.sequencer = Sequencer()
-        self.current_file_path = None
+        self.current_file_path = None  # 当前打开的文件路径
+        self.current_midi_file_path = None  # 当前导入的MIDI文件路径
+        
+        # 初始化设置管理器（用于保存/读取设置）
+        self.settings = QSettings("8bit", "MusicMaker")
         
         # 初始化快捷键管理器
         self.shortcut_manager = get_shortcut_manager()
@@ -120,19 +127,21 @@ class MainWindow(QMainWindow):
         playback_control_area.setLayout(playback_control_layout)
         
         # ========== 左侧：播放控制按钮 ==========
-        # 播放按钮组（使用图标）
-        self.play_button = QPushButton("▶")  # 播放图标
-        self.play_button.setToolTip("播放")
-        self.play_button.clicked.connect(self.play)
-        playback_control_layout.addWidget(self.play_button)
+        # 播放按钮组（使用图标，互斥逻辑）
+        # 创建按钮组，实现互斥（类似老式录音机）
+        self.playback_button_group = QButtonGroup()
+        self.playback_button_group.setExclusive(True)  # 互斥模式
         
-        self.pause_button = QPushButton("⏸")  # 暂停图标
-        self.pause_button.setToolTip("暂停")
-        self.pause_button.clicked.connect(self.pause)
-        playback_control_layout.addWidget(self.pause_button)
+        # 播放/停止按钮（合并播放和暂停）
+        self.play_stop_button = QPushButton("▶")  # 播放图标
+        self.play_stop_button.setToolTip("播放/停止")
+        self.play_stop_button.setCheckable(False)  # 不可选中（不是切换按钮）
+        self.play_stop_button.clicked.connect(self.toggle_play_stop)
+        playback_control_layout.addWidget(self.play_stop_button)
         
         self.stop_button = QPushButton("⏹")  # 停止图标
         self.stop_button.setToolTip("停止")
+        self.stop_button.setCheckable(False)
         self.stop_button.clicked.connect(self.stop)
         playback_control_layout.addWidget(self.stop_button)
         
@@ -156,9 +165,30 @@ class MainWindow(QMainWindow):
         self.bpm_spinbox.valueChanged.connect(self.on_bpm_changed)
         playback_control_layout.addWidget(self.bpm_spinbox)
         
+        # 文件名显示（BPM右侧）
+        self.file_name_label = QLabel("")
+        self.file_name_label.setMinimumWidth(150)
+        self.file_name_label.setMaximumWidth(300)
+        self.file_name_label.setToolTip("当前打开的文件")
+        playback_control_layout.addWidget(self.file_name_label)
+        
         playback_control_layout.addStretch()
         
-        # ========== 右侧：音量控制 ==========
+        # ========== 右侧：视图切换和音量控制 ==========
+        # 视图切换（拨动开关样式）
+        view_label = QLabel("视图:")
+        playback_control_layout.addWidget(view_label)
+        
+        # 创建拨动开关组件
+        from ui.toggle_switch_widget import ToggleSwitchWidget
+        self.view_toggle_switch = ToggleSwitchWidget()
+        self.view_toggle_switch.setToolTip("切换视图：左侧=序列，右侧=示波器")
+        # 连接位置变化信号
+        self.view_toggle_switch.position_changed.connect(self.on_view_switch_changed)
+        playback_control_layout.addWidget(self.view_toggle_switch)
+        
+        playback_control_layout.addSpacing(16)
+        
         # 播放音量控制
         volume_label = QLabel("音量:")
         playback_control_layout.addWidget(volume_label)
@@ -177,11 +207,24 @@ class MainWindow(QMainWindow):
         
         track_area_layout.addWidget(playback_control_area)
         
-        # 下方：音轨区域（序列编辑器）
+        # 下方：使用堆叠界面切换视图
+        self.view_stack = QStackedWidget()
+        
+        # 序列编辑器视图
         self.sequence_widget = GridSequenceWidget(self.sequencer.get_bpm())
-        # 连接添加音轨按钮（从序列编辑器移到了主窗口的播放控制区域）
-        # 现在需要连接到序列编辑器中的按钮
-        track_area_layout.addWidget(self.sequence_widget, 1)  # 可拉伸
+        self.view_stack.addWidget(self.sequence_widget)
+        
+        # 示波器视图
+        self.oscilloscope_widget = OscilloscopeWidget(
+            self.sequencer.audio_engine,
+            self.sequencer.get_bpm()
+        )
+        self.view_stack.addWidget(self.oscilloscope_widget)
+        
+        # 默认显示序列视图
+        self.view_stack.setCurrentIndex(0)
+        
+        track_area_layout.addWidget(self.view_stack, 1)  # 可拉伸
         
         # 连接序列编辑器中的添加音轨按钮
         self.sequence_widget.add_track_button.clicked.connect(self.on_add_track_clicked)
@@ -242,11 +285,9 @@ class MainWindow(QMainWindow):
         button_style = theme.get_style("button")
         button_small_style = theme.get_style("button_small")
         
-        # 播放控制按钮
-        if hasattr(self, 'play_button'):
-            self.play_button.setStyleSheet(button_style)
-        if hasattr(self, 'pause_button'):
-            self.pause_button.setStyleSheet(button_style)
+        # 播放控制按钮（应用主题样式）
+        if hasattr(self, 'play_stop_button'):
+            self.play_stop_button.setStyleSheet(button_style)
         if hasattr(self, 'stop_button'):
             self.stop_button.setStyleSheet(button_style)
         # 添加音轨按钮现在在序列编辑器中
@@ -269,9 +310,22 @@ class MainWindow(QMainWindow):
             # SpinBox使用类似LineEdit的样式
             self.bpm_spinbox.setStyleSheet(theme.get_style("line_edit"))
         
+        # 视图切换按钮（已替换为拨动开关，不需要应用样式）
+        
         # 属性面板
         if hasattr(self, 'property_dock'):
             self.property_dock.setStyleSheet(theme.get_style("dialog"))
+        
+        # 示波器widget（确保主题应用）
+        if hasattr(self, 'oscilloscope_widget'):
+            self.oscilloscope_widget.apply_theme()
+        
+        # 节拍器widget（确保主题应用）
+        if hasattr(self, 'metronome_widget'):
+            if hasattr(self.metronome_widget, 'toggle_button'):
+                self.metronome_widget.toggle_button.setStyleSheet(button_style)
+            if hasattr(self.metronome_widget, 'bpm_label'):
+                self.metronome_widget.bpm_label.setStyleSheet(label_style)
     
     
     def init_default_tracks(self):
@@ -330,6 +384,9 @@ class MainWindow(QMainWindow):
         
         # 音轨删除信号
         self.sequence_widget.track_deleted.connect(self.on_track_deleted)
+        
+        # 渲染波形请求信号
+        self.sequence_widget.render_waveform_requested.connect(self.on_render_waveform_requested)
     
     def on_playhead_time_changed(self, time: float):
         """播放线时间改变（用户拖动进度条时）"""
@@ -345,15 +402,20 @@ class MainWindow(QMainWindow):
         # 更新播放开始偏移（用于下次播放时从正确位置开始）
         self.playback_start_offset = time
     
-    def refresh_ui(self, preserve_selection: bool = False):
+    def refresh_ui(self, preserve_selection: bool = False, force_full_refresh: bool = False):
         """刷新UI显示
         
         Args:
             preserve_selection: 是否保持选中状态（用于属性面板更新时）
+            force_full_refresh: 是否强制全量刷新（用于音轨删除等操作）
         """
-        # 更新序列编辑器
+        # 更新序列编辑器（强制全量刷新以确保删除的音轨和音符被清除）
         self.sequence_widget.set_tracks(self.sequencer.project.tracks, preserve_selection=preserve_selection)
         self.sequence_widget.set_bpm(self.sequencer.get_bpm())
+        
+        # 如果强制全量刷新，调用序列编辑器的全量刷新
+        if force_full_refresh:
+            self.sequence_widget.refresh(force_full_refresh=True)
         
         # 更新进度条的总时长
         if hasattr(self.sequence_widget, 'progress_bar'):
@@ -362,6 +424,47 @@ class MainWindow(QMainWindow):
         
         # 更新统一编辑器BPM
         self.unified_editor.set_bpm(self.sequencer.get_bpm())
+        
+        # 更新示波器（只有在当前视图是示波器视图时才更新）
+        if hasattr(self, 'oscilloscope_widget') and hasattr(self, 'view_stack'):
+            # 如果当前不在示波器视图，不更新示波器（避免覆盖用户选择）
+            if self.view_stack.currentIndex() != 1:
+                # 不在示波器视图，只更新BPM
+                self.oscilloscope_widget.set_bpm(self.sequencer.get_bpm())
+            else:
+                # 在示波器视图，才更新音轨
+                # 优先检查用户是否选择了要渲染的音轨
+                if hasattr(self.oscilloscope_widget, '_selected_tracks_for_render') and \
+                   self.oscilloscope_widget._selected_tracks_for_render:
+                    # 用户已经选择了要渲染的音轨，直接使用，不覆盖
+                    enabled_tracks = [t for t in self.sequencer.project.tracks if t.enabled]
+                    user_selected = [t for t in self.oscilloscope_widget._selected_tracks_for_render if t in enabled_tracks]
+                    if user_selected:
+                        # 只更新BPM，不更新音轨（保持用户选择）
+                        self.oscilloscope_widget.set_bpm(self.sequencer.get_bpm())
+                    else:
+                        # 用户选择的音轨都不在启用的音轨中，清空
+                        self.oscilloscope_widget.set_tracks([])
+                        self.oscilloscope_widget.set_bpm(self.sequencer.get_bpm())
+                else:
+                    # 没有用户选择，使用默认逻辑
+                    # 获取选中的音轨（使用统一方法）
+                    selected_track = self._get_selected_track()
+                    
+                    # 获取所有启用的音轨
+                    enabled_tracks = [t for t in self.sequencer.project.tracks if t.enabled]
+                    
+                    # 如果有选中的音轨，只渲染选中的
+                    if selected_track and selected_track in enabled_tracks:
+                        self.oscilloscope_widget.set_tracks(enabled_tracks, selected_track=selected_track)
+                    elif len(enabled_tracks) <= 3:
+                        # 不超过3个，自动渲染所有音轨
+                        self.oscilloscope_widget.set_tracks(enabled_tracks)
+                    else:
+                        # 超过3个音轨，但没有用户选择，默认渲染前3个
+                        self.oscilloscope_widget.set_selected_tracks(enabled_tracks[:3])
+                        self.oscilloscope_widget.set_tracks(enabled_tracks[:3])
+                    self.oscilloscope_widget.set_bpm(self.sequencer.get_bpm())
     
     def on_add_melody_note(self, pitch: int, duration_beats: float, waveform, target_track=None, insert_mode="sequential"):
         """添加主旋律音符"""
@@ -808,6 +911,12 @@ class MainWindow(QMainWindow):
         from core.command import DeleteTrackCommand
         from PyQt5.QtWidgets import QMessageBox
         
+        # 检查音轨是否还在项目中（可能已经被删除）
+        if track not in self.sequencer.project.tracks:
+            # 音轨已经被删除，直接刷新UI
+            self.refresh_ui()
+            return
+        
         # 确认删除
         reply = QMessageBox.question(
             self, "确认删除", 
@@ -821,8 +930,8 @@ class MainWindow(QMainWindow):
             command = DeleteTrackCommand(self.sequencer, track)
             self.sequencer.command_history.execute_command(command)
             
-            # 刷新UI
-            self.refresh_ui()
+            # 强制全量刷新UI（确保删除的音轨和所有音符都被清除）
+            self.refresh_ui(force_full_refresh=True)
             
             # 清除选中状态
             self.selected_note = None
@@ -894,6 +1003,15 @@ class MainWindow(QMainWindow):
             self.metronome_widget.set_playing(True)
         elif not enabled:
             self.metronome_widget.set_playing(False)
+    
+    def toggle_play_stop(self):
+        """切换播放/停止状态（合并播放和暂停）"""
+        if self.sequencer.playback_state.is_playing:
+            # 正在播放，点击停止
+            self.stop()
+        else:
+            # 未播放，点击播放
+            self.play()
     
     def toggle_play_pause(self):
         """切换播放/暂停"""
@@ -1010,7 +1128,7 @@ class MainWindow(QMainWindow):
         # 设置菜单
         settings_menu = menubar.addMenu("设置(&S)")
         
-        # 设置对话框
+        # 设置对话框（统一设置窗口）
         settings_action = QAction("设置(&S)...", self)
         settings_action.triggered.connect(self.show_settings)
         settings_menu.addAction(settings_action)
@@ -1041,10 +1159,26 @@ class MainWindow(QMainWindow):
     def new_project(self):
         """新建项目"""
         if self.check_unsaved_changes():
+            # 创建新的序列器（这会创建新的项目）
             self.sequencer = Sequencer()
             self.current_file_path = None
+            self.current_midi_file_path = None
             self.setWindowTitle("8bit音乐制作器 - 新建项目")
+            # 更新文件名显示
+            self._update_file_name_display()
+            
+            # 停止播放
+            self.stop()
+            
+            # 强制刷新UI（确保所有组件都清空）
             self.refresh_ui()
+            
+            # 清除选中状态
+            self.selected_note = None
+            self.selected_track = None
+            if hasattr(self, 'unified_editor'):
+                self.unified_editor.set_selected_track(None)
+            
             self.statusBar().showMessage("已创建新项目")
     
     def open_or_import_file(self):
@@ -1072,19 +1206,42 @@ class MainWindow(QMainWindow):
     def open_project_file(self, file_path: str):
         """打开项目文件"""
         try:
+            # 创建加载进度对话框
+            progress = QProgressDialog("正在加载项目...", "取消", 0, 100, self)
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)  # 立即显示
+            progress.setValue(0)
+            QApplication.processEvents()  # 处理事件，确保对话框显示
+            
             import json
+            progress.setLabelText("正在读取文件...")
+            progress.setValue(10)
+            QApplication.processEvents()
+            
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
+            
+            progress.setLabelText("正在解析项目数据...")
+            progress.setValue(30)
+            QApplication.processEvents()
             
             # 清除属性面板的状态（清除旧的音轨信息）
             self.property_panel.set_track(None)
             self.property_panel.set_note(None, None)
             self.property_panel.set_notes([])
             
+            progress.setLabelText("正在加载项目...")
+            progress.setValue(50)
+            QApplication.processEvents()
+            
             project = Project.from_dict(data)
             self.sequencer.set_project(project)
             self.current_file_path = file_path
             self.setWindowTitle(f"8bit音乐制作器 - {project.name}")
+            
+            progress.setLabelText("正在更新界面...")
+            progress.setValue(70)
+            QApplication.processEvents()
             
             # 清除选中状态
             self.selected_note = None
@@ -1092,9 +1249,23 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'unified_editor'):
                 self.unified_editor.set_selected_track(None)
             
+            progress.setLabelText("正在刷新显示...")
+            progress.setValue(90)
+            QApplication.processEvents()
+            
             # 强制全量刷新UI（清除所有旧的UI元素，确保track引用正确）
             self.sequence_widget.refresh(force_full_refresh=True)
             self.refresh_ui()
+            
+            progress.setValue(100)
+            progress.close()
+            
+            # 保存项目文件路径
+            self.current_file_path = file_path
+            # 清除MIDI文件路径（因为打开了项目文件）
+            self.current_midi_file_path = None
+            # 更新文件名显示
+            self._update_file_name_display()
             self.statusBar().showMessage(f"已打开项目: {file_path}")
         except Exception as e:
             QMessageBox.critical(self, "错误", f"打开项目失败:\n{str(e)}")
@@ -1104,9 +1275,19 @@ class MainWindow(QMainWindow):
         if not self.check_unsaved_changes():
             return
         
+        # 获取上次打开的目录
+        last_dir = self.settings.value("last_open_directory", "")
+        if not last_dir or not os.path.exists(last_dir):
+            last_dir = ""
+        
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "打开项目", "", "JSON文件 (*.json);;所有文件 (*.*)"
+            self, "打开项目", last_dir, "JSON文件 (*.json);;所有文件 (*.*)"
         )
+        
+        # 保存当前打开的目录
+        if file_path:
+            directory = os.path.dirname(file_path)
+            self.settings.setValue("last_open_directory", directory)
         
         if file_path:
             self.open_project_file(file_path)
@@ -1121,9 +1302,14 @@ class MainWindow(QMainWindow):
     
     def export_file(self):
         """导出文件（统一处理项目保存和音频导出）"""
+        # 获取上次保存的目录
+        last_dir = self.settings.value("last_save_directory", "")
+        if not last_dir or not os.path.exists(last_dir):
+            last_dir = ""
+        
         # 文件格式选择对话框
         file_path, selected_filter = QFileDialog.getSaveFileName(
-            self, "导出文件", "",
+            self, "导出文件", last_dir,
             "JSON项目文件 (*.json);;"
             "MIDI文件 (*.mid);;"
             "WAV音频文件 (*.wav);;"
@@ -1134,6 +1320,10 @@ class MainWindow(QMainWindow):
         
         if not file_path:
             return
+        
+        # 保存当前保存的目录
+        directory = os.path.dirname(file_path)
+        self.settings.setValue("last_save_directory", directory)
         
         # 根据选择的过滤器确定文件格式
         if "JSON" in selected_filter:
@@ -1268,10 +1458,25 @@ class MainWindow(QMainWindow):
             if not self.check_unsaved_changes():
                 return
             
+            # 创建加载进度对话框
+            progress = QProgressDialog("正在导入MIDI文件...", "取消", 0, 100, self)
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)  # 立即显示
+            progress.setValue(0)
+            QApplication.processEvents()  # 处理事件，确保对话框显示
+            
+            progress.setLabelText("正在读取MIDI文件...")
+            progress.setValue(10)
+            QApplication.processEvents()
+            
             # 清除属性面板的状态（清除旧的音轨信息）
             self.property_panel.set_track(None)
             self.property_panel.set_note(None, None)
             self.property_panel.set_notes([])
+            
+            progress.setLabelText("正在解析MIDI数据...")
+            progress.setValue(20)
+            QApplication.processEvents()
             
             # 获取当前选择的默认波形（从统一编辑器）
             default_waveform = self.unified_editor.selected_waveform
@@ -1282,13 +1487,27 @@ class MainWindow(QMainWindow):
             snap_to_beat = settings_manager.is_snap_to_beat_enabled()
             allow_overlap = settings_manager.is_overlap_allowed()
             
+            progress.setLabelText("正在导入MIDI文件...")
+            progress.setValue(40)
+            QApplication.processEvents()
+            
             # 导入MIDI文件，使用默认波形和设置
             project = MidiIO.import_midi(file_path, default_waveform=default_waveform,
                                         snap_to_beat=snap_to_beat, allow_overlap=allow_overlap)
             
+            progress.setLabelText("正在设置项目...")
+            progress.setValue(60)
+            QApplication.processEvents()
+            
             # 设置项目
             self.sequencer.set_project(project)
             self.current_file_path = None  # MIDI导入后，项目文件路径为空
+            # 保存MIDI文件路径
+            self.current_midi_file_path = file_path
+            
+            progress.setLabelText("正在更新界面...")
+            progress.setValue(70)
+            QApplication.processEvents()
             
             # 清除选中状态
             self.selected_note = None
@@ -1296,29 +1515,55 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'unified_editor'):
                 self.unified_editor.set_selected_track(None)
             
-            # 强制全量刷新UI（清除所有旧的UI元素，确保track引用正确）
+            progress.setLabelText("正在刷新显示...")
+            progress.setValue(80)
+            QApplication.processEvents()
+            
+            # 先更新tracks，然后强制全量刷新UI（清除所有旧的UI元素，确保track引用正确）
+            self.sequence_widget.set_tracks(project.tracks, preserve_selection=False)
             self.sequence_widget.refresh(force_full_refresh=True)
             self.refresh_ui()
+            
+            progress.setLabelText("正在完成导入...")
+            progress.setValue(90)
+            QApplication.processEvents()
             
             # 更新BPM显示
             self.bpm_spinbox.setValue(int(project.bpm))
             
+            progress.setValue(100)
+            progress.close()
+            
+            # 更新文件名显示
+            self._update_file_name_display()
             self.statusBar().showMessage(f"已导入MIDI: {file_path}")
         except Exception as e:
             QMessageBox.critical(self, "错误", f"导入MIDI失败:\n{str(e)}")
     
     def import_midi(self):
         """导入MIDI文件（保留以兼容旧代码）"""
+        # 获取上次打开的目录
+        last_dir = self.settings.value("last_open_directory", "")
+        if not last_dir or not os.path.exists(last_dir):
+            last_dir = ""
+        
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "导入MIDI", "", "MIDI文件 (*.mid *.midi);;所有文件 (*.*)"
+            self, "导入MIDI", last_dir, "MIDI文件 (*.mid *.midi);;所有文件 (*.*)"
         )
         
+        # 保存当前打开的目录
         if file_path:
+            directory = os.path.dirname(file_path)
+            self.settings.setValue("last_open_directory", directory)
             self.import_midi_file(file_path)
     
     
     def play(self):
         """播放"""
+        # 如果已经在播放，不重复播放
+        if self.sequencer.playback_state.is_playing:
+            return
+        
         # 获取当前播放头位置
         current_time = self.sequence_widget.playhead_time
         
@@ -1333,12 +1578,25 @@ class MainWindow(QMainWindow):
         self.playback_start_time = time.time()
         self.playback_start_offset = current_time
         
+        # 更新按钮状态和文本
+        if hasattr(self, 'play_stop_button'):
+            self.play_stop_button.setText("⏸")  # 暂停图标
+            self.play_stop_button.setToolTip("暂停")
+        
         # 同步节拍器
         if self.metronome_widget.is_enabled:
             self.metronome_widget.set_playing(True)
+        
+        # 更新示波器播放状态
+        if hasattr(self, 'oscilloscope_widget'):
+            self.oscilloscope_widget.set_playing(True)
     
     def pause(self):
         """暂停"""
+        # 如果已经在暂停状态，不重复暂停
+        if not self.sequencer.playback_state.is_playing:
+            return
+        
         if self.sequencer.playback_state.is_playing:
             self.sequencer.stop()
             self.statusBar().showMessage("已暂停")
@@ -1346,6 +1604,15 @@ class MainWindow(QMainWindow):
             # 不启用预览功能，保持暂停状态
             # 同步节拍器
             self.metronome_widget.set_playing(False)
+        
+        # 更新示波器播放状态
+        if hasattr(self, 'oscilloscope_widget'):
+            self.oscilloscope_widget.set_playing(False)
+        
+        # 更新按钮状态和文本
+        if hasattr(self, 'play_stop_button'):
+            self.play_stop_button.setText("▶")  # 播放图标
+            self.play_stop_button.setToolTip("播放")
     
     def stop(self):
         """停止"""
@@ -1361,15 +1628,171 @@ class MainWindow(QMainWindow):
         
         # 同步节拍器
         self.metronome_widget.set_playing(False)
+        
+        # 更新按钮状态和文本
+        if hasattr(self, 'play_stop_button'):
+            self.play_stop_button.setText("▶")  # 播放图标
+            self.play_stop_button.setToolTip("播放")
+    
+    def switch_view(self, index: int):
+        """切换视图
+        
+        Args:
+            index: 视图索引（0=序列视图，1=示波器视图）
+        """
+        # 如果切换到示波器视图，检查是否有选中的音轨
+        if index == 1:  # 示波器视图
+            # 优先检查用户是否选择了要渲染的音轨
+            if hasattr(self.oscilloscope_widget, '_selected_tracks_for_render') and \
+               self.oscilloscope_widget._selected_tracks_for_render:
+                # 用户已经选择了要渲染的音轨，直接使用，不覆盖
+                enabled_tracks = [t for t in self.sequencer.project.tracks if t.enabled]
+                user_selected = [t for t in self.oscilloscope_widget._selected_tracks_for_render if t in enabled_tracks]
+                if user_selected:
+                    # 用户选择的音轨存在且启用，使用它们
+                    self.oscilloscope_widget.set_tracks(user_selected)
+                else:
+                    # 用户选择的音轨都不在启用的音轨中，显示提示
+                    self.oscilloscope_widget.set_tracks([])
+                    self.statusBar().showMessage("选择的音轨未启用，请先启用音轨")
+            else:
+                # 没有用户选择的音轨，检查是否有选中的音轨
+                selected_track = self._get_selected_track()
+                
+                if selected_track is None:
+                    # 没有选中音轨，显示提示
+                    self.view_stack.setCurrentIndex(index)
+                    if hasattr(self, 'oscilloscope_widget'):
+                        self.oscilloscope_widget.set_tracks([])  # 清空音轨，显示提示
+                    self.statusBar().showMessage("请先选择一个音轨")
+                    # 更新拨动开关位置（即使没有选中音轨也切换到示波器视图）
+                    if hasattr(self, 'view_toggle_switch'):
+                        # 临时断开信号，避免循环调用
+                        self.view_toggle_switch.position_changed.disconnect()
+                        self.view_toggle_switch.animate_to(index)
+                        # 重新连接信号
+                        self.view_toggle_switch.position_changed.connect(self.on_view_switch_changed)
+                    return
+                else:
+                    # 有选中的音轨，更新示波器
+                    enabled_tracks = [t for t in self.sequencer.project.tracks if t.enabled]
+                    if selected_track in enabled_tracks:
+                        self.oscilloscope_widget.set_tracks(enabled_tracks, selected_track=selected_track)
+        
+        if hasattr(self, 'view_stack'):
+            self.view_stack.setCurrentIndex(index)
+            # 更新拨动开关位置（不触发信号，避免循环调用）
+            if hasattr(self, 'view_toggle_switch'):
+                # 临时断开信号，避免循环调用
+                self.view_toggle_switch.position_changed.disconnect()
+                self.view_toggle_switch.animate_to(index)
+                # 重新连接信号
+                self.view_toggle_switch.position_changed.connect(self.on_view_switch_changed)
+    
+    def _get_selected_track(self):
+        """获取当前选中的音轨（从多个可能的来源）"""
+        # 1. 检查 sequence_widget 的 highlighted_track
+        if hasattr(self, 'sequence_widget') and hasattr(self.sequence_widget, 'highlighted_track'):
+            if self.sequence_widget.highlighted_track:
+                return self.sequence_widget.highlighted_track
+        
+        # 2. 检查 main_window 的 selected_track
+        if hasattr(self, 'selected_track') and self.selected_track:
+            return self.selected_track
+        
+        # 3. 检查 unified_editor 的 selected_track
+        if hasattr(self, 'unified_editor') and hasattr(self.unified_editor, 'selected_track'):
+            if self.unified_editor.selected_track:
+                return self.unified_editor.selected_track
+        
+        return None
+    
+    def on_view_switch_changed(self, position: int):
+        """视图拨动开关位置改变"""
+        self.switch_view(position)
+    
+    def on_render_waveform_requested(self, track):
+        """渲染音轨选择请求"""
+        # 获取所有启用的音轨
+        enabled_tracks = [t for t in self.sequencer.project.tracks if t.enabled]
+        
+        if not enabled_tracks:
+            # 没有启用的音轨
+            self.statusBar().showMessage("没有启用的音轨，请先启用音轨")
+            return
+        
+        # 如果不超过3个音轨，自动选择所有音轨渲染
+        if len(enabled_tracks) <= 3:
+            # 自动选择所有音轨
+            self.oscilloscope_widget.set_selected_tracks(enabled_tracks)
+            # 切换到示波器视图
+            self.view_stack.setCurrentIndex(1)
+            if hasattr(self, 'view_toggle_switch'):
+                self.view_toggle_switch.position_changed.disconnect()
+                self.view_toggle_switch.animate_to(1)
+                self.view_toggle_switch.position_changed.connect(self.on_view_switch_changed)
+            # 渲染所有音轨
+            self.oscilloscope_widget.set_tracks(enabled_tracks)
+            self.statusBar().showMessage(f"正在渲染 {len(enabled_tracks)} 个音轨的波形")
+        else:
+            # 超过3个音轨，弹出选择对话框
+            self.show_track_selection_dialog(enabled_tracks)
+    
+    def _update_file_name_display(self):
+        """更新文件名显示"""
+        if hasattr(self, 'file_name_label'):
+            if self.current_midi_file_path:
+                # 显示MIDI文件名
+                file_name = os.path.basename(self.current_midi_file_path)
+                self.file_name_label.setText(f"文件: {file_name}")
+            elif self.current_file_path:
+                # 显示项目文件名
+                file_name = os.path.basename(self.current_file_path)
+                self.file_name_label.setText(f"文件: {file_name}")
+            else:
+                # 没有打开文件
+                self.file_name_label.setText("")
     
     def on_bpm_changed(self, value: int):
         """BPM改变"""
+        # 播放期间禁止调整BPM
+        if self.sequencer.playback_state.is_playing:
+            # 恢复原来的BPM值
+            current_bpm = int(self.sequencer.get_bpm())
+            self.bpm_spinbox.blockSignals(True)  # 临时阻止信号，避免循环
+            self.bpm_spinbox.setValue(current_bpm)
+            self.bpm_spinbox.blockSignals(False)
+            self.statusBar().showMessage("播放期间不能调整BPM，请先停止播放")
+            return
+        
         bpm = float(value)
+        old_bpm = self.sequencer.get_bpm()
         self.sequencer.set_bpm(bpm)
         self.sequence_widget.set_bpm(bpm)
         self.unified_editor.set_bpm(bpm)
         self.property_panel.set_bpm(bpm)
         self.metronome_widget.set_bpm(bpm)
+        # 更新示波器BPM
+        if hasattr(self, 'oscilloscope_widget'):
+            self.oscilloscope_widget.set_bpm(bpm)
+        
+        # 如果正在播放，需要重新计算播放位置（基于新的BPM）
+        if self.sequencer.playback_state.is_playing and self.playback_start_time:
+            import time
+            # 计算当前播放时间（基于旧BPM）
+            elapsed_time = time.time() - self.playback_start_time
+            current_time_old_bpm = self.playback_start_offset + elapsed_time
+            
+            # 将时间转换为节拍数（基于旧BPM）
+            beats_old = current_time_old_bpm * old_bpm / 60.0
+            
+            # 将节拍数转换回时间（基于新BPM）
+            current_time_new_bpm = beats_old * 60.0 / bpm
+            
+            # 更新播放起始偏移，确保播放线位置正确
+            self.playback_start_offset = current_time_new_bpm
+            self.playback_start_time = time.time()
+        
         self.refresh_ui()
     
     def on_volume_changed(self, value: int):
@@ -1401,6 +1824,10 @@ class MainWindow(QMainWindow):
                     self.sequence_widget.set_playhead_time(current_time)
                     # 更新进度条的当前时间
                     self.sequence_widget.progress_bar.set_current_time(current_time)
+            
+            # 更新示波器
+            if hasattr(self, 'oscilloscope_widget'):
+                self.oscilloscope_widget.set_current_time(current_time)
             
             # 确保预览被禁用（防止播放过程中被启用）
             if self.unified_editor.preview_enabled:
@@ -1634,6 +2061,221 @@ class MainWindow(QMainWindow):
             
             self.refresh_ui()
             self.statusBar().showMessage(f"已添加音轨: {track.name}")
+    
+    def show_oscilloscope_render_count_dialog(self):
+        """显示示波器渲染音符数设置对话框"""
+        if hasattr(self, 'oscilloscope_widget'):
+            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QSpinBox, QDialogButtonBox
+            theme = theme_manager.current_theme
+            
+            dialog = QDialog(self)
+            dialog.setWindowTitle("示波器设置")
+            dialog.setStyleSheet(theme.get_style("dialog"))
+            
+            layout = QVBoxLayout()
+            dialog.setLayout(layout)
+            
+            label = QLabel("渲染音符数 (1-50):")
+            label.setStyleSheet(theme.get_style("label"))
+            layout.addWidget(label)
+            
+            spinbox = QSpinBox()
+            spinbox.setRange(1, 50)
+            spinbox.setValue(self.oscilloscope_widget.max_notes_to_render)
+            spinbox.setStyleSheet(theme.get_style("line_edit"))
+            layout.addWidget(spinbox)
+            
+            button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            button_box.setStyleSheet(theme.get_style("button"))
+            button_box.accepted.connect(dialog.accept)
+            button_box.rejected.connect(dialog.reject)
+            layout.addWidget(button_box)
+            
+            if dialog.exec_() == QDialog.Accepted:
+                self.oscilloscope_widget.max_notes_to_render = spinbox.value()
+                # 清除波形缓存，强制重新生成
+                if hasattr(self.oscilloscope_widget, 'waveform_cache'):
+                    self.oscilloscope_widget.waveform_cache.clear()
+                self.oscilloscope_widget.update()
+    
+    def show_oscilloscope_pre_render_dialog(self):
+        """显示示波器预渲染音符数设置对话框"""
+        if hasattr(self, 'oscilloscope_widget'):
+            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QSpinBox, QDialogButtonBox
+            theme = theme_manager.current_theme
+            
+            dialog = QDialog(self)
+            dialog.setWindowTitle("示波器设置")
+            dialog.setStyleSheet(theme.get_style("dialog"))
+            
+            layout = QVBoxLayout()
+            dialog.setLayout(layout)
+            
+            label = QLabel("预渲染音符数 (0-10):")
+            label.setStyleSheet(theme.get_style("label"))
+            layout.addWidget(label)
+            
+            spinbox = QSpinBox()
+            spinbox.setRange(0, 10)
+            spinbox.setValue(self.oscilloscope_widget.pre_render_notes)
+            spinbox.setStyleSheet(theme.get_style("line_edit"))
+            layout.addWidget(spinbox)
+            
+            button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            button_box.setStyleSheet(theme.get_style("button"))
+            button_box.accepted.connect(dialog.accept)
+            button_box.rejected.connect(dialog.reject)
+            layout.addWidget(button_box)
+            
+            if dialog.exec_() == QDialog.Accepted:
+                self.oscilloscope_widget.pre_render_notes = spinbox.value()
+                self.oscilloscope_widget.update()
+    
+    def show_oscilloscope_code_language_dialog(self):
+        """显示示波器代码语言设置对话框"""
+        if hasattr(self, 'oscilloscope_widget'):
+            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QComboBox, QDialogButtonBox, QTextEdit
+            theme = theme_manager.current_theme
+            
+            dialog = QDialog(self)
+            dialog.setWindowTitle("示波器代码语言设置")
+            dialog.setStyleSheet(theme.get_style("dialog"))
+            dialog.resize(500, 400)
+            
+            layout = QVBoxLayout()
+            dialog.setLayout(layout)
+            
+            # 语言选择
+            label = QLabel("代码语言:")
+            label.setStyleSheet(theme.get_style("label"))
+            layout.addWidget(label)
+            
+            language_combo = QComboBox()
+            language_combo.addItems(["伪代码 (Pseudocode)", "MicroPython (ESP32)", "汇编 (Assembly)"])
+            language_map = {"伪代码 (Pseudocode)": "pseudocode", "MicroPython (ESP32)": "micropython", "汇编 (Assembly)": "assembly"}
+            reverse_map = {"pseudocode": 0, "micropython": 1, "assembly": 2}
+            language_combo.setCurrentIndex(reverse_map.get(self.oscilloscope_widget.code_language, 0))
+            language_combo.setStyleSheet(theme.get_style("line_edit"))
+            layout.addWidget(language_combo)
+            
+            # 代码模板编辑
+            template_label = QLabel("代码模板 (可使用变量: {frequency}, {duration}, {duration_ms}, {waveform}, {duty}, {duty_cycle}, {pitch}):")
+            template_label.setStyleSheet(theme.get_style("label"))
+            layout.addWidget(template_label)
+            
+            template_edit = QTextEdit()
+            current_lang = self.oscilloscope_widget.code_language
+            template_edit.setPlainText(self.oscilloscope_widget.code_templates.get(current_lang, ""))
+            template_edit.setStyleSheet(theme.get_style("line_edit"))
+            template_edit.setFont(QFont("Consolas", 10))
+            layout.addWidget(template_edit)
+            
+            # 语言切换时更新模板
+            def on_language_changed(index):
+                lang_key = language_map[language_combo.currentText()]
+                template_edit.setPlainText(self.oscilloscope_widget.code_templates.get(lang_key, ""))
+            language_combo.currentIndexChanged.connect(on_language_changed)
+            
+            button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            button_box.setStyleSheet(theme.get_style("button"))
+            button_box.accepted.connect(dialog.accept)
+            button_box.rejected.connect(dialog.reject)
+            layout.addWidget(button_box)
+            
+            if dialog.exec_() == QDialog.Accepted:
+                selected_lang = language_map[language_combo.currentText()]
+                self.oscilloscope_widget.code_language = selected_lang
+                self.oscilloscope_widget.code_templates[selected_lang] = template_edit.toPlainText()
+                self.oscilloscope_widget.update()
+    
+    def show_track_selection_dialog(self, enabled_tracks):
+        """显示音轨选择对话框（当启用的音轨超过3个时）
+        
+        Args:
+            enabled_tracks: 所有启用的音轨列表
+        """
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QCheckBox, QDialogButtonBox, QScrollArea, QWidget, QMessageBox
+        theme = theme_manager.current_theme
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("选择要渲染的音轨（最多3个）")
+        dialog.setStyleSheet(theme.get_style("dialog"))
+        dialog.resize(400, 300)
+        
+        layout = QVBoxLayout()
+        dialog.setLayout(layout)
+        
+        label = QLabel("请选择要渲染的音轨（最多选择3个）:")
+        label.setStyleSheet(theme.get_style("label"))
+        layout.addWidget(label)
+        
+        # 创建滚动区域
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout()
+        scroll_widget.setLayout(scroll_layout)
+        
+        checkboxes = []
+        # 如果已经有用户选择的音轨，默认选中它们
+        default_selected = []
+        if hasattr(self.oscilloscope_widget, '_selected_tracks_for_render') and \
+           self.oscilloscope_widget._selected_tracks_for_render:
+            default_selected = self.oscilloscope_widget._selected_tracks_for_render
+        else:
+            # 如果没有用户选择，默认选择前3个
+            default_selected = enabled_tracks[:3]
+        
+        for track in enabled_tracks:
+            checkbox = QCheckBox(track.name)
+            checkbox.setStyleSheet(theme.get_style("label"))
+            # 如果音轨在默认选中列表中，设置为选中
+            if track in default_selected:
+                checkbox.setChecked(True)
+            checkboxes.append((checkbox, track))
+            scroll_layout.addWidget(checkbox)
+        
+        scroll_layout.addStretch()
+        scroll_area.setWidget(scroll_widget)
+        layout.addWidget(scroll_area)
+        
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.setStyleSheet(theme.get_style("button"))
+        
+        def on_ok():
+            selected = [track for checkbox, track in checkboxes if checkbox.isChecked()]
+            if len(selected) > 3:
+                QMessageBox.warning(dialog, "警告", "最多只能选择3个音轨！")
+                return
+            if len(selected) == 0:
+                QMessageBox.warning(dialog, "警告", "请至少选择1个音轨！")
+                return
+            
+            # 保存用户选择的音轨
+            self.oscilloscope_widget.set_selected_tracks(selected)
+            
+            # 直接使用用户选择的音轨设置示波器（在切换视图之前）
+            # 这样即使后续有refresh_ui调用，也会保留用户的选择
+            self.oscilloscope_widget.set_tracks(selected)
+            
+            # 切换到示波器视图
+            self.view_stack.setCurrentIndex(1)
+            if hasattr(self, 'view_toggle_switch'):
+                self.view_toggle_switch.position_changed.disconnect()
+                self.view_toggle_switch.animate_to(1)
+                self.view_toggle_switch.position_changed.connect(self.on_view_switch_changed)
+            
+            # 确保触发重绘
+            self.oscilloscope_widget.update()
+            self.statusBar().showMessage(f"正在渲染 {len(selected)} 个音轨的波形")
+            
+            dialog.accept()
+        
+        button_box.accepted.connect(on_ok)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+        
+        dialog.exec_()
     
     def closeEvent(self, event):
         """窗口关闭事件"""

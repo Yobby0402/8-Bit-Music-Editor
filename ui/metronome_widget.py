@@ -42,18 +42,11 @@ class MetronomeWidget(QWidget):
         self.setLayout(layout)
         self.setMaximumHeight(80)
         
-        # 标题
-        title = QLabel("节拍器")
-        title.setStyleSheet("font-weight: bold; font-size: 12px; padding: 5px;")
-        title.setAlignment(Qt.AlignCenter)
-        title.setMinimumWidth(60)
-        layout.addWidget(title)
-        
-        # 开关按钮
-        self.toggle_button = QPushButton("开启")
+        # 开关按钮（去掉"节拍器"标题，按钮显示"节拍器：开启"/"节拍器：关闭"）
+        self.toggle_button = QPushButton("节拍器：开启")
         self.toggle_button.setCheckable(True)
-        self.toggle_button.setMinimumWidth(60)
-        self.toggle_button.setMaximumWidth(60)
+        self.toggle_button.setMinimumWidth(100)
+        self.toggle_button.setMaximumWidth(120)
         self.toggle_button.clicked.connect(self.on_toggle)
         layout.addWidget(self.toggle_button)
         
@@ -86,7 +79,7 @@ class MetronomeWidget(QWidget):
         """设置节拍器启用状态"""
         self.is_enabled = enabled
         self.toggle_button.setChecked(enabled)
-        self.toggle_button.setText("关闭" if enabled else "开启")
+        self.toggle_button.setText("节拍器：关闭" if enabled else "节拍器：开启")
         
         if enabled and self.is_playing:
             self.start_metronome()
@@ -121,9 +114,16 @@ class MetronomeWidget(QWidget):
         self.beat_indicator.set_beat(0, 0.0)
         self.update()
     
-    def on_toggle(self, checked: bool):
+    def on_toggle(self, checked: bool = None):
         """节拍器开关"""
-        self.set_enabled(checked)
+        if checked is None:
+            # 如果没有传入checked参数，切换状态
+            self.is_enabled = not self.is_enabled
+        else:
+            self.is_enabled = checked
+        self.toggle_button.setChecked(self.is_enabled)
+        self.toggle_button.setText("节拍器：关闭" if self.is_enabled else "节拍器：开启")
+        self.metronome_toggled.emit(self.is_enabled)
     
     def on_beat_tick(self):
         """节拍器滴答"""
