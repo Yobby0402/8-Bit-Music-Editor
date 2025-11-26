@@ -572,7 +572,11 @@ class SettingsDialog(QDialog):
             try:
                 key_seq = QKeySequence(key)
                 key_name = key_seq.toString()
-            except Exception:
+            except Exception as e:
+                # 理论上这里不会抛异常，但若发生了，直接打印出来方便调试
+                import traceback
+                print("解析快捷键按键时出错：", e)
+                traceback.print_exc()
                 key_name = ""
             if not key_name:
                 return

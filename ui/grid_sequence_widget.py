@@ -234,7 +234,15 @@ class SequenceBlock(QGraphicsItem):
         else:
             # Note 使用时间，需要转换为节拍
             duration_beats = self.item.duration * self.bpm / 60.0
-        width = max(20, duration_beats * self.pixels_per_beat)  # 最小20像素
+
+        # 原来这里强制最小宽度 20 像素，在大幅缩小时会导致：
+        # - 网格线继续变密（pixels_per_beat 变小），但音符宽度不再变窄；
+        # - 视觉上看起来音符“挤出”原本所属的小节，和节线对不上。
+        # 为了在任意缩放下保持音符与网格严格同步，这里改为仅做一个非常小的保护值，
+        # 防止宽度为 0 导致点击困难，但不会明显影响视觉比例。
+        raw_width = duration_beats * self.pixels_per_beat
+        min_width = 2.0  # 仅避免完全不可见，不再强制 20 像素
+        width = max(min_width, raw_width)
         
         return QRectF(0, 0, width, 40)
     
@@ -796,9 +804,9 @@ class GridSequenceWidget(QWidget):
             if not block.is_dragging:
                 continue
             
-            # 获取当前吸附位置
+            # 获取当前吸附位置（场景坐标，x=0 对应第 0 拍）
             pos = block.pos()
-            x_offset = pos.x() - 100
+            x_offset = pos.x()
             if x_offset >= 0:
                 beats = x_offset / block.pixels_per_beat
                 
@@ -1430,7 +1438,7 @@ class GridSequenceWidget(QWidget):
                 # 确保start_beats不小于0
                 start_beats = max(0, start_beats)
                 
-                # 关键修复：计算绝对x坐标（从0开始，因为左侧固定区域已经处理了标签和勾选框）
+                # 关键修复：计算绝对x坐标（从0开始，因为左侧固定区域已经单独处理）
                 x = start_beats * self.pixels_per_beat
                 
                 # 重构：音符块直接使用绝对坐标，不添加到TrackGroup
@@ -1438,8 +1446,8 @@ class GridSequenceWidget(QWidget):
                 track_y = track_index * 60 + 20  # 轨道顶部Y坐标
                 note_y = track_y + 10  # 轨道中间位置（轨道高度60，音符高度40，居中）
                 
-                # 确保x坐标不小于100（轨道标签宽度）
-                absolute_x = max(100, x)
+                # 确保x坐标不小于0（第 0 拍）
+                absolute_x = max(0, x)
                 block.setPos(absolute_x, note_y)
                 block.original_y = note_y
                 
@@ -1485,7 +1493,7 @@ class GridSequenceWidget(QWidget):
             # 确保start_beats不小于0
             start_beats = max(0, start_beats)
             
-            # 关键修复：计算绝对x坐标（从0开始，因为左侧固定区域已经处理了标签和勾选框）
+            # 关键修复：计算绝对x坐标（从0开始，因为左侧固定区域已经单独处理）
             x = start_beats * self.pixels_per_beat
                 
             # 重构：音符块直接使用绝对坐标，不添加到TrackGroup
@@ -1493,7 +1501,7 @@ class GridSequenceWidget(QWidget):
             track_y = track_index * 60 + 20  # 轨道顶部Y坐标
             note_y = track_y + 10  # 轨道中间位置（轨道高度60，音符高度40，居中）
             
-            # 确保x坐标不小于0
+            # 确保x坐标不小于0（第 0 拍）
             absolute_x = max(0, x)
             block.setPos(absolute_x, note_y)
             block.original_y = note_y
@@ -1587,78 +1595,27 @@ class GridSequenceWidget(QWidget):
     def _draw_tracks_and_blocks(self):
         """绘制所有轨道和块（用于全量刷新）"""
         track_spacing = 60
-        
+
+        # 全量刷新时，为了与增量刷新保持完全一致的行为，
+        # 不再在这里重复实现一套坐标/缩放逻辑，而是直接复用
+        # `_update_or_create_block` 的实现：这样缩放、对齐、重叠检查
+        # 都只在一处维护，避免出现“缩放不同步”“位置错乱”等问题。
         for i, track in enumerate(self.tracks):
             y = i * track_spacing + 20
+            # 先确保轨道基础 UI（轨道线等）存在
             self._create_track_ui(track, i, y)
-            
-            track_type = self.get_track_type(track)
-            
+
             if track.track_type == TrackType.DRUM_TRACK:
                 sorted_events = sorted(track.drum_events, key=lambda e: e.start_beat)
                 for event in sorted_events:
-                    start_beats = event.start_beat
-                    # 根据设置决定是否对齐
-                    from ui.settings_manager import get_settings_manager
-                    settings_manager = get_settings_manager()
-                    if settings_manager.is_snap_to_beat_enabled():
-                        start_beats = round(start_beats * 4) / 4
-                    x = 100 + start_beats * self.pixels_per_beat
-                    block = SequenceBlock(event, track, i, "drum", y, self.bpm, self.pixels_per_beat, parent_widget=self)
-                    # 如果block在TrackGroup中，使用相对坐标
-                    if i < len(self.track_groups):
-                        track_group = self.track_groups[i]
-                        # 音符块的y坐标相对于轨道组，应该在轨道中间（轨道高度60，音符高度40，所以y=10）
-                        relative_x = max(0, x - 100)  # x需要减去100（轨道标签宽度）
-                        relative_y = 10  # 轨道中间位置（轨道高度60，音符高度40，居中）
-                        block.setPos(relative_x, relative_y)
-                        track_group.add_note_block((id(event), id(track)), block)
-                    else:
-                        # 向后兼容：如果TrackGroup不存在，使用绝对坐标
-                        block.setPos(x, y)
-                        self.scene.addItem(block)
-                    block.setZValue(10)  # 确保音符在网格线之上
-                    if self.selected_item == event:
-                        block.setSelected(True)
-                    if (event, track) in self.selected_items:
-                        block.setSelected(True)
-                    block.signals.clicked.connect(lambda e, t=track: self.on_note_block_clicked(e, t))
-                    block.signals.position_changed.connect(lambda e, old_st, new_st, t=track: self.on_drum_event_position_changed(e, t, old_st, new_st))
-                    self.note_blocks[(id(event), id(track))] = block
+                    block_key = (id(event), id(track))
+                    self._update_or_create_block(block_key, event, track, i, y, "drum")
             else:
                 sorted_notes = sorted(track.notes, key=lambda n: n.start_time)
                 for note in sorted_notes:
-                    start_beats = note.start_time * self.bpm / 60.0
-                    # 根据设置决定是否对齐
-                    from ui.settings_manager import get_settings_manager
-                    settings_manager = get_settings_manager()
-                    if settings_manager.is_snap_to_beat_enabled():
-                        start_beats = round(start_beats * 4) / 4
-                    x = 100 + start_beats * self.pixels_per_beat
-                    block = SequenceBlock(note, track, i, track_type, y, self.bpm, self.pixels_per_beat, parent_widget=self)
-                    # 如果block在TrackGroup中，使用相对坐标
-                    if i < len(self.track_groups):
-                        track_group = self.track_groups[i]
-                        # 音符块的y坐标相对于轨道组，应该在轨道中间（轨道高度60，音符高度40，所以y=10）
-                        # 确保x坐标不小于0（相对于组，实际显示时会在100之后）
-                        relative_x = max(0, x - 100)  # x需要减去100（轨道标签宽度）
-                        relative_y = 10  # 轨道中间位置（轨道高度60，音符高度40，居中）
-                        block.setPos(relative_x, relative_y)
-                        track_group.add_note_block((id(note), id(track)), block)
-                    else:
-                        # 向后兼容：如果TrackGroup不存在，使用绝对坐标
-                        # 确保x坐标不小于100（轨道标签宽度）
-                        absolute_x = max(100, x)
-                        block.setPos(absolute_x, y)
-                        self.scene.addItem(block)
-                    block.setZValue(10)  # 确保音符在网格线之上
-                if self.selected_item == note:
-                    block.setSelected(True)
-                if (note, track) in self.selected_items:
-                    block.setSelected(True)
-                block.signals.clicked.connect(lambda n, t=track: self.on_note_block_clicked(n, t))
-                block.signals.position_changed.connect(lambda n, old_st, new_st, t=track: self.on_note_position_changed(n, t, old_st, new_st))
-                self.note_blocks[(id(note), id(track))] = block
+                    block_key = (id(note), id(track))
+                    track_type = self.get_track_type(track)
+                    self._update_or_create_block(block_key, note, track, i, y, track_type)
     
     def on_note_block_clicked(self, note, track):
         """音符块被点击"""
@@ -1856,7 +1813,8 @@ class GridSequenceWidget(QWidget):
                     # 更新另一个block的位置
                     if other_block:
                         old_start_beats = old_start_time * self.bpm / 60.0
-                        other_snapped_x = old_start_beats * self.pixels_per_beat  # 从0开始，因为左侧固定区域已经处理了标签和勾选框
+                        # 从第 0 拍开始计算绝对坐标
+                        other_snapped_x = old_start_beats * self.pixels_per_beat
                         other_block.setPos(other_snapped_x, other_block.original_y)
                         # 发送位置改变信号（需要3个参数：item, old_time, new_time）
                         QTimer.singleShot(0, lambda: other_block.signals.position_changed.emit(
@@ -2236,7 +2194,8 @@ class GridSequenceWidget(QWidget):
                     settings_manager = get_settings_manager()
                     if settings_manager.is_snap_to_beat_enabled():
                         start_beats = round(start_beats * 4) / 4
-                    x = 100 + start_beats * self.pixels_per_beat
+                    # 缩放时统一使用从第 0 拍开始的场景坐标，避免与初始绘制、拖动计算不一致
+                    x = start_beats * self.pixels_per_beat
                     
                     # 更新位置
                     block.setPos(x, block.original_y)
@@ -2290,7 +2249,8 @@ class GridSequenceWidget(QWidget):
                 settings_manager = get_settings_manager()
                 if settings_manager.is_snap_to_beat_enabled():
                     start_beats = round(start_beats * 4) / 4
-                x = 100 + start_beats * self.pixels_per_beat
+                # 统一使用从第 0 拍开始的场景坐标
+                x = start_beats * self.pixels_per_beat
                 
                 # 更新位置
                 block.setPos(x, block.original_y)

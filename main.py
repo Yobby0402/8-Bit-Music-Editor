@@ -25,9 +25,23 @@ def main():
         try:
             QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
             QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
-        except:
+        except Exception:
+            # 这里是启动前的兼容性设置，失败时不影响后续逻辑，不必中断程序
             pass
-    
+
+    # 安装全局异常捕获，确保任何未捕获的异常都会打印完整堆栈，方便排查闪退
+    def _handle_exception(exc_type, exc_value, exc_traceback):
+        import traceback
+        # 避免重复打印 KeyboardInterrupt
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+        print("\n========== 未捕获的异常（Uncaught Exception） ==========")
+        traceback.print_exception(exc_type, exc_value, exc_traceback)
+        print("=====================================================\n")
+
+    sys.excepthook = _handle_exception
+
     app = QApplication(sys.argv)
     
     # 设置自适应字体大小（根据DPI）

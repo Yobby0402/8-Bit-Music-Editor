@@ -843,7 +843,7 @@ class PropertyPanelWidget(QWidget):
                 self.duration_spinbox.blockSignals(False)
                 self.update_duration_seconds()
                 
-                self.property_changed.emit(self.current_note, self.current_track)
+            self.property_changed.emit(self.current_note, self.current_track)
     
     def on_duration_changed(self, value: float):
         """时长改变（value是节拍数）"""

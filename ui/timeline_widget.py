@@ -117,13 +117,13 @@ class TimelineWidget(QWidget):
         x = pos.x() - 100  # 减去轨道标签宽度
         if x < 0:
             x = 0
-        
+
         # 计算对应的节拍数
         beat_position = x / self.pixels_per_beat
         # 转换为时间（秒）
         beats_per_second = self.bpm / 60.0
         time = beat_position / beats_per_second
-        
+
         # 根据设置决定是否吸附
         from ui.settings_manager import get_settings_manager
         settings_manager = get_settings_manager()
@@ -135,10 +135,10 @@ class TimelineWidget(QWidget):
         else:
             # 不吸附，直接使用计算的时间
             snapped_time = time
-        
+
         self.current_time = snapped_time
         self.update()
-        
+
         # 发送信号
         self.playhead_time_changed.emit(snapped_time)
     

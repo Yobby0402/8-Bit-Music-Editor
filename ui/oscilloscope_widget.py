@@ -8,7 +8,7 @@
 import numpy as np
 from typing import List, Optional, Tuple
 from PyQt5.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QSpinBox
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QRect
 from PyQt5.QtGui import QPainter, QPen, QColor, QFont
 
 from core.models import Track, TrackType, Note
@@ -62,16 +62,11 @@ class OscilloscopeWidget(QWidget):
             "assembly": "MOV A, #{frequency}\nOUT PORT_B, A\nCALL DELAY_{duration}ms"
         }
         
-        # 更新定时器
-        self.update_timer = QTimer()
-        self.update_timer.timeout.connect(self.update_waveforms)
-        self.update_timer.setInterval(16)  # 每16ms更新一次（约60fps），确保平滑动画
-        
-        # 静态更新定时器（即使不播放也定期更新）
-        self.static_update_timer = QTimer()
-        self.static_update_timer.timeout.connect(self.update_waveforms)
-        self.static_update_timer.setInterval(200)  # 每200ms更新一次
-        self.static_update_timer.start()  # 始终运行
+        # 早期版本使用内部定时器高频刷新示波器，这在某些机器上会造成明显的闪烁感。
+        # 现在改为完全依赖外部（主窗口）的播放定时器来更新 current_time，
+        # 并在 set_current_time 中触发重绘，这里不再启动任何自动刷新定时器。
+        self.update_timer = None
+        self.static_update_timer = None
         
         # 当前播放时间（由外部设置）
         self.current_time = 0.0
@@ -182,12 +177,6 @@ class OscilloscopeWidget(QWidget):
         if hasattr(self, 'waveform_cache'):
             self.waveform_cache = {k: v for k, v in self.waveform_cache.items() if k[0] in current_track_ids}
         
-        # 重置内部时间，确保刷新
-        if hasattr(self, 'internal_time'):
-            self.internal_time = 0.0
-        if hasattr(self, 'current_time'):
-            self.current_time = 0.0
-        
         self.update()
     
     def set_selected_tracks(self, selected_tracks: List[Track]):
@@ -219,12 +208,6 @@ class OscilloscopeWidget(QWidget):
             if track_key not in self.track_colors:
                 self.track_colors[track_key] = self.channel_colors[i % len(self.channel_colors)]
         
-        # 重置内部时间
-        if hasattr(self, 'internal_time'):
-            self.internal_time = 0.0
-        if hasattr(self, 'current_time'):
-            self.current_time = 0.0
-        
         # 触发重绘
         self.update()
         for i, track in enumerate(self.tracks):
@@ -239,25 +222,31 @@ class OscilloscopeWidget(QWidget):
     
     def set_current_time(self, current_time: float):
         """设置当前播放时间"""
-        # 简化为直接使用当前时间，避免双重时间轴导致的视觉抖动
+        # 为避免由于定时器抖动导致时间轻微“倒退”而出现来回抖动，
+        # 这里只屏蔽非常小的负向抖动；
+        # 对于跳跃较大的时间变化（例如重新播放 / 拖动播放头），则视为正常seek。
+        if self.is_playing and current_time < self.current_time:
+            delta = self.current_time - current_time
+            # 小于 0.2 秒的微小回退视为抖动，直接忽略
+            if delta < 0.2:
+                return
+            # 大于等于 0.2 秒则认为是用户跳转或重新播放，允许时间重置
+
         self.current_time = current_time
         self.internal_time = current_time
+        # 每次时间更新时触发一次重绘，由外部的播放定时器控制刷新频率，
+        # 避免内部再叠加高频刷新造成闪烁。
+        self.update()
     
     def set_playing(self, is_playing: bool):
         """设置播放状态"""
         self.is_playing = is_playing
-        if is_playing:
-            if not self.update_timer.isActive():
-                self.update_timer.start()
-        else:
-            if self.update_timer.isActive():
-                self.update_timer.stop()
         # 即使不播放也触发一次重绘，显示当前状态
         self.update()
     
     def generate_code_for_note(self, note: Note, track: Track) -> str:
         """
-        为音符生成代码文本（只显示频率）
+        为音符生成代码文本（根据当前选中的代码模板）
         
         Args:
             note: 音符对象
@@ -267,13 +256,66 @@ class OscilloscopeWidget(QWidget):
             代码文本字符串（只包含频率）
         """
         if note is None:
+            # 没有音符时，简单显示轨道名，避免显示空白
             return track.name[:10]
-        
-        # 计算频率
+
+        # 计算基础参数
         frequency = self.audio_engine.waveform_generator.midi_to_frequency(note.pitch)
         frequency_int = int(frequency)
-        
-        return f"{frequency_int}Hz"
+        duration = max(0.0, float(note.duration))
+        duration_ms = int(duration * 1000)
+
+        # 波形 / 占空比等信息
+        waveform_name = getattr(getattr(note, "waveform", None), "name", "UNKNOWN")
+        # duty_cycle 在模型中通常是 0.0-1.0 的浮点数，这里把它转换为百分比显示，避免一直为 0
+        raw_duty = getattr(note, "duty_cycle", 0.5)
+        if raw_duty is None:
+            raw_duty = 0.5
+        if 0.0 <= raw_duty <= 1.0:
+            duty_cycle = raw_duty
+            duty = int(round(raw_duty * 100))
+        else:
+            # 如果内部已经是 0-100 这样的数值，则反推回 0-1 区间
+            duty = int(raw_duty)
+            duty_cycle = duty / 100.0 if duty > 0 else 0.0
+        pitch = int(getattr(note, "pitch", 0))
+        track_name = getattr(track, "name", "")
+
+        # 选择当前语言的模板；如果缺失就退回到默认伪代码模板
+        template = self.code_templates.get(self.code_language) or self.code_templates.get("pseudocode", "")
+        if not template:
+            return f"{frequency_int}Hz"
+
+        try:
+            code = template.format(
+                frequency=frequency_int,
+                duration=duration,
+                duration_ms=duration_ms,
+                waveform=waveform_name,
+                duty=duty,
+                duty_cycle=duty_cycle,
+                pitch=pitch,
+                track_name=track_name,
+            )
+            # 为了不撑爆左侧区域，只取前几行，并对每一行做长度限制，但保留换行结构
+            max_lines = 3
+            max_cols_per_line = 40
+            lines = code.splitlines() or [code]
+            trimmed_lines = []
+            for i, ln in enumerate(lines):
+                if i >= max_lines:
+                    break
+                if len(ln) > max_cols_per_line:
+                    trimmed_lines.append(ln[: max_cols_per_line])
+                else:
+                    trimmed_lines.append(ln)
+            return "\n".join(trimmed_lines)
+        except Exception as e:
+            # 模板占位符写错时，至少保证不会崩溃，回退到频率显示
+            import traceback
+            print("生成示波器伪代码文本时出错：", e)
+            traceback.print_exc()
+            return f"{frequency_int}Hz"
     
     def get_notes_in_range(self, track: Track, start_time: float, end_time: float) -> List[Note]:
         """
@@ -333,9 +375,11 @@ class OscilloscopeWidget(QWidget):
             pad_samples = max(1, int(len(waveform) * 0.03))
             zero_pad = np.zeros(pad_samples, dtype=np.float32)
             waveform = np.concatenate([zero_pad, waveform, zero_pad])
-        except Exception:
-            # 任何异常都回退到原始波形，避免崩溃
-            pass
+        except Exception as e:
+            # 这里不应该导致程序崩溃，但需要把异常打印出来，方便定位潜在问题
+            import traceback
+            print("示波器波形补零时出错：", e)
+            traceback.print_exc()
         
         # 对波形进行采样以适应显示
         # 使用更智能的采样方法，保持频率特征
@@ -505,27 +549,22 @@ class OscilloscopeWidget(QWidget):
         # 绘制蜂鸣器（在右侧）
         buzzer_y = height // 2
         buzzer_radius = 20
-        
+
+        # 为了避免红色播放线挡住扬声器图标，这里将扬声器整体向右移动一段距离，
+        # 红线仍然表示实际的“播放位置”，位于 buzzer_x。
+        speaker_center_x = buzzer_x + buzzer_radius + 6
+
         # 蜂鸣器背景
         buzzer_bg = QColor(100, 100, 100)
         painter.setBrush(buzzer_bg)
         painter.setPen(QPen(QColor(200, 200, 200), 2))
         painter.drawEllipse(
-            buzzer_x - buzzer_radius,
+            speaker_center_x - buzzer_radius,
             buzzer_y - buzzer_radius,
             buzzer_radius * 2,
             buzzer_radius * 2
         )
-        
-        # 蜂鸣器标签
-        painter.setPen(QPen(text_color))
-        painter.setFont(QFont("Arial", 9))
-        painter.drawText(
-            buzzer_x - 15,
-            buzzer_y + 5,
-            "输出"
-        )
-        
+
         # 绘制蜂鸣器垂直线（表示播放位置）
         painter.setPen(QPen(QColor(255, 0, 0), 2))
         painter.drawLine(
@@ -562,34 +601,37 @@ class OscilloscopeWidget(QWidget):
             )
             
             # 绘制代码显示（左侧）
-            # 找到即将播放的音符（最接近蜂鸣器的音符）
-            animation_time = self.internal_time if hasattr(self, 'internal_time') else self.current_time
+            # 使用“当前正在输出”或“下一条将要输出”的音符来生成文本，
+            # 避免之前基于 time_to_buzzer 的复杂逻辑造成跳动感。
             upcoming_note = None
             if track.track_type == TrackType.NOTE_TRACK:
-                # 找到最接近蜂鸣器位置（即将播放）的音符
-                time_to_buzzer = waveform_area_width / self.waveform_speed
-                target_time = animation_time + time_to_buzzer
-                
-                # 查找在目标时间附近的音符
+                now = self.current_time
+                # 1. 优先找当前正在播放的音符（start_time <= now < end_time）
                 for note in track.notes:
-                    note_end_time = note.start_time + note.duration
-                    # 如果音符的开始时间在目标时间附近（前后0.5秒内）
-                    if abs(note.start_time - target_time) < 0.5 or (note.start_time <= target_time <= note_end_time):
-                        if upcoming_note is None or abs(note.start_time - target_time) < abs(upcoming_note.start_time - target_time):
-                            upcoming_note = note
+                    note_end = note.start_time + note.duration
+                    if note.start_time <= now < note_end:
+                        upcoming_note = note
                         break
+                # 2. 如果当前没有音符在播放，则找 start_time > now 的最近一条
+                if upcoming_note is None:
+                    future_notes = [n for n in track.notes if n.start_time > now]
+                    if future_notes:
+                        upcoming_note = min(future_notes, key=lambda n: n.start_time)
             
-            # 生成并显示代码（只显示频率）
+            # 生成并显示代码（使用当前代码模板）
             code_text = self.generate_code_for_note(upcoming_note, track) if upcoming_note else track.name[:10]
             
-            # 绘制代码文本（使用等宽字体，更适合代码显示）
+            # 绘制代码文本（使用等宽字体，并支持多行显示）
             painter.setPen(QPen(text_color))
             painter.setFont(QFont("Consolas", 9))  # 等宽字体
-            painter.drawText(
+            # 在左侧留出一块矩形区域用于显示多行文本
+            text_rect = QRect(
                 10,
-                channel_center_y + 5,
-                code_text[:25]  # 限制长度
+                channel_y,
+                waveform_start_x - 20,  # 到波形区域起点之前
+                self.channel_height
             )
+            painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter | Qt.TextWordWrap, code_text)
             
             # 绘制通道网格线（水平中心线，从最左边到蜂鸣器）
             painter.setPen(QPen(grid_color, 1, Qt.DotLine))
@@ -606,14 +648,18 @@ class OscilloscopeWidget(QWidget):
                 animation_time = self.internal_time if hasattr(self, 'internal_time') else self.current_time
                 
                 # 使用固定时间窗口，保证“当前时间”准确落在蜂鸣器所在的红线上
-                # 可见时间范围：从 (current_time - visible_window) 到 current_time
+                # 为了让波形在视觉上从左向右移动，并且「到达红线的时间 = 播放时间」，
+                # 这里采用窗口 [current_time, current_time + visible_window]：
+                # - 窗口左端（最靠近蜂鸣器的一侧）对应 current_time；
+                # - 窗口右端对应未来一段时间的波形。
                 time_range_for_area = self.visible_window
                 num_samples = self.num_samples
                 # 这里用 (num_samples - 1) 确保最后一个采样点严格对应当前时间
                 time_step = time_range_for_area / max(1, (num_samples - 1))
                 
-                visible_end_time = max(0.0, animation_time)
-                visible_start_time = max(0.0, visible_end_time - time_range_for_area)
+                # 当前时间作为窗口起点，保证到达蜂鸣器的时间就是 current_time
+                visible_start_time = max(0.0, animation_time)
+                visible_end_time = visible_start_time + time_range_for_area
                 
                 # 获取这个时间范围内的所有音符（稍微扩大范围以确保覆盖）
                 all_notes = self.get_notes_in_range(track, visible_start_time - 0.5, visible_end_time + 0.5)
@@ -690,17 +736,19 @@ class OscilloscopeWidget(QWidget):
                     continuous_waveform = continuous_waveform / max_amp
                 
                 # 现在计算每个采样点在屏幕上的x位置
-                # 将整个可见时间窗口线性映射到完整的波形区域宽度：
-                # - 最左边对应 visible_start_time（过去）
-                # - 最右边（蜂鸣器位置）对应 visible_end_time == current_time
+                # 为了让波形视觉上「从左向右」流动到蜂鸣器，这里对原有坐标做一次左右镜像：
+                # 过去的时间靠右，接近当前时间的波形靠近蜂鸣器一侧；
+                # 通过镜像后，原本从右向左的运动会变成从左向右。
                 points = []
                 for i in range(num_samples):
-                    # 线性插值到 [0, waveform_area_width]（时间从左到右推进）
+                    # 原始归一化坐标（0 在窗口一端，1 在另一端）
                     if num_samples > 1:
                         x_norm = i / (num_samples - 1)
                     else:
                         x_norm = 0.0
-                    x = x_norm * waveform_area_width
+                    # 镜像到相反方向：这样原本向左移动的图像会变成向右移动
+                    mirrored_x_norm = 1.0 - x_norm
+                    x = mirrored_x_norm * waveform_area_width
                     screen_x = waveform_start_x + x
                     # 使用接近整个通道高度的比例，使波形更“饱满”
                     screen_y = channel_center_y - continuous_waveform[i] * self.channel_height * 0.45

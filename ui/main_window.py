@@ -292,8 +292,11 @@ class MainWindow(QMainWindow):
                 font = app.font()
                 font.setPointSize(self.settings_manager.get_ui_font_size())
                 app.setFont(font)
-        except Exception:
-            pass
+        except Exception as e:
+            # 显式打印异常，避免静默失败影响后续布局 / 绘制但又没有任何提示
+            import traceback
+            print("应用全局字体设置时出错：", e)
+            traceback.print_exc()
         
         # 背景色应用到主要区域
         if central_widget is None:
@@ -1090,7 +1093,8 @@ class MainWindow(QMainWindow):
     def toggle_play_pause(self):
         """切换播放/暂停"""
         if self.sequencer.playback_state.is_playing:
-            self.stop()
+            # 播放中按空格应为“暂停”，保留当前位置，方便继续播放
+            self.pause()
         else:
             self.play()
     
@@ -2028,6 +2032,17 @@ class MainWindow(QMainWindow):
         osc_widget = getattr(self, "oscilloscope_widget", None)
         dialog = SettingsDialog(self, oscilloscope_widget=osc_widget)
         if dialog.exec_() == QDialog.Accepted:
+            # 设置已应用，在此基础上强制对序列编辑器做一次全量刷新，
+            # 确保任何显示相关的变更（包括播放线刷新间隔引发的重绘）
+            # 都不会留下“音符临时不显示”的状态。
+            if hasattr(self, "sequence_widget") and hasattr(self.sequencer, "project"):
+                try:
+                    # 先同步轨道引用，再做全量刷新
+                    self.sequence_widget.set_tracks(self.sequencer.project.tracks, preserve_selection=True)
+                    self.sequence_widget.refresh(force_full_refresh=True)
+                except Exception:
+                    # 出现异常时避免影响主流程，仅在状态栏提示
+                    pass
             self.statusBar().showMessage("设置已更新")
     
     def show_shortcut_config(self):
