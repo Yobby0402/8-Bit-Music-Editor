@@ -350,9 +350,17 @@ class AudioEngine:
         # 只混合启用的轨道
         enabled_tracks = [track for track in project.tracks if track.enabled]
         
-        # 使用项目中的BPM和原始BPM来计算时间缩放
-        original_bpm = project.original_bpm if hasattr(project, 'original_bpm') and project.original_bpm is not None else project.bpm
-        return self.mix_tracks(enabled_tracks, start_time, end_time, project.bpm, original_bpm)
+        # 为了保证“时间轴上的音符位置”和“实际播放时间”严格一致，
+        # 这里不再根据 BPM 对时间做二次缩放，而是直接使用 note.start_time / duration
+        # 作为绝对秒数来生成音频。
+        #
+        # 说明：
+        # - MIDI 导入时已经把 tick 换算成了秒，并写入 Note.start_time / duration；
+        # - 如果在这里再根据 (original_bpm, project.bpm) 做缩放，
+        #   音频时长会被拉伸/压缩，而网格上的音符位置仍然保持原始秒数，
+        #   导致播放线“越来越快超过音符”。
+        # - 因此生成项目音频时统一使用 bpm=None, original_bpm=None，禁用 BPM 比例缩放。
+        return self.mix_tracks(enabled_tracks, start_time, end_time, bpm=None, original_bpm=None)
     
     def play_audio(
         self,

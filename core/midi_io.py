@@ -130,21 +130,21 @@ class MidiIO:
             Note列表
         """
         notes = []
-        active_notes: Dict[int, Dict[str, Any]] = {}  # {note_number: {start_tick, velocity}}
+        active_notes: Dict[int, Dict[str, Any]] = {}  # {note_number: {start_tick, start_time, velocity}}
         current_tempo = bpm
         current_time = 0.0  # 当前时间（秒）
-        tick_time = 0  # 当前tick数
+        tick_time = 0       # 当前tick数
         
-        # 计算tick到秒的转换
-        def ticks_to_seconds(ticks: int) -> float:
-            return ticks * 60.0 / (current_tempo * ticks_per_beat)
+        # 根据当前tempo计算tick到秒的转换
+        def ticks_to_seconds(ticks: int, tempo_bpm: float) -> float:
+            return ticks * 60.0 / (tempo_bpm * ticks_per_beat) if tempo_bpm > 0 else 0.0
         
         for msg in midi_track:
             # 更新当前时间
             tick_time += msg.time
-            current_time += ticks_to_seconds(msg.time)
+            current_time += ticks_to_seconds(msg.time, current_tempo)
             
-            # 处理tempo消息
+            # 处理tempo消息（允许MIDI内部改变速度）
             if msg.type == 'set_tempo':
                 current_tempo = mido.tempo2bpm(msg.tempo)
                 continue

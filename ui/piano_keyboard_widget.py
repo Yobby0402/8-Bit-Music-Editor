@@ -33,8 +33,10 @@ class PianoKeysContainer(QWidget):
         
         # 黑键容器（第一行，居中）
         self.black_keys_container = QWidget()
-        self.black_keys_container.setMinimumHeight(50)  # 确保黑键容器有足够高度
-        self.black_keys_container.setMaximumHeight(50)  # 限制最大高度，避免被裁剪
+        # 让黑键容器高度可以随整体缩放，而不是固定死，避免在矮窗口中被裁剪
+        from PyQt5.QtWidgets import QSizePolicy
+        self.black_keys_container.setMinimumHeight(30)  # 给一个较小的最小高度，避免太挤
+        self.black_keys_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.black_keys_layout = QHBoxLayout()
         self.black_keys_layout.setContentsMargins(0, 0, 0, 0)
         self.black_keys_layout.addStretch()  # 左侧弹性空间
@@ -43,8 +45,9 @@ class PianoKeysContainer(QWidget):
         
         # 白键容器（第二行，居中）
         self.white_keys_container = QWidget()
-        self.white_keys_container.setMinimumHeight(100)  # 确保白键容器有足够高度（2:1比例）
-        self.white_keys_container.setMaximumHeight(100)  # 限制最大高度，避免被裁剪
+        # 白键区域高度允许根据可用空间缩放，避免固定高度导致下半截被遮挡
+        self.white_keys_container.setMinimumHeight(60)
+        self.white_keys_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.white_keys_layout = QHBoxLayout()
         self.white_keys_layout.setContentsMargins(0, 0, 0, 0)
         self.white_keys_layout.addStretch()  # 左侧弹性空间
@@ -103,11 +106,10 @@ class PianoKeyboardWidget(QWidget):
         layout = QVBoxLayout()
         self.setLayout(layout)
         
-        # 设置统一背景色
+        # 背景透明，使用父容器（统一编辑器）的背景色/渐变
         from ui.theme import theme_manager
         theme = theme_manager.current_theme
-        bg_color = theme.get_color('background')
-        self.setStyleSheet(f"background-color: {bg_color};")
+        self.setStyleSheet("background: transparent;")
         
         # 八度选择（上方，居中）
         octave_wrapper = QWidget()
@@ -128,8 +130,8 @@ class PianoKeyboardWidget(QWidget):
             btn.setCheckable(True)
             btn.setMinimumWidth(40)
             btn.setMaximumWidth(50)
-            btn.setMinimumHeight(30)
-            # 应用主题样式，使其与其他按键统一
+            btn.setMinimumHeight(32)
+            # 应用主题样式，使其与其他按键统一（不在样式中固定字体大小，使用全局字体设置）
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {theme.get_color('primary')};
@@ -137,7 +139,6 @@ class PianoKeyboardWidget(QWidget):
                     border: 2px solid {theme.get_color('border')};
                     border-radius: 6px;
                     padding: 4px 8px;
-                    font-size: 11px;
                     font-weight: 500;
                 }}
                 QPushButton:hover {{
@@ -166,7 +167,7 @@ class PianoKeyboardWidget(QWidget):
         octave_wrapper_layout.addLayout(octave_layout)
         octave_wrapper_layout.addStretch()
         octave_wrapper.setLayout(octave_wrapper_layout)
-        layout.addWidget(octave_wrapper)
+        layout.addWidget(octave_wrapper, 0)
         
         # 八度滑块区域（在八度按钮下方）
         octave_slider_wrapper = QWidget()
@@ -216,19 +217,16 @@ class PianoKeyboardWidget(QWidget):
         
         octave_slider_layout.addWidget(self.octave_slider)
         octave_slider_wrapper.setLayout(octave_slider_layout)
-        octave_slider_wrapper.setMaximumHeight(40)
-        layout.addWidget(octave_slider_wrapper)
+        octave_slider_wrapper.setMaximumHeight(36)
+        layout.addWidget(octave_slider_wrapper, 0)
         
         # 钢琴键盘区域（黑白键分别布局，各自居中）
         self.keys_container = PianoKeysContainer(self)
-        # 白键和黑键高度比为2:1，确保白键显示完整
-        # 白键100px + 黑键50px + 间距10px = 160px，但为了确保不被裁剪，设置为170px
-        self.keys_container.setMinimumHeight(170)  # 确保黑白键完全显示，不被裁剪
-        self.keys_container.setMaximumHeight(170)  # 限制最大高度
-        # 不设置背景色，使用父容器的背景色（与其他部分一致）
+        # 钢琴区域尽量占满剩余空间，同时允许在小窗口中压缩
+        self.keys_container.setMinimumHeight(140)
+        self.keys_container.setMaximumHeight(400)
         self.keys_container.setStyleSheet("")  # 透明背景，继承父容器
-        # 确保内容不会被裁剪
-        self.keys_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.keys_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
         # 创建白键和黑键
         self.white_buttons = []
@@ -243,17 +241,17 @@ class PianoKeyboardWidget(QWidget):
         for col, note_name in enumerate(white_notes):
             btn = MultilineButton(note_name)
             btn.setCheckable(True)
-            btn.setMinimumHeight(100)  # 白键高度100px（与黑键50px形成2:1比例）
-            btn.setMaximumHeight(100)  # 限制最大高度
+            # 白键高度由容器自动拉伸，设一个合理的最小/最大范围，尽量填满区域
+            btn.setMinimumHeight(70)
+            btn.setMaximumHeight(260)
             btn.setFixedWidth(60)  # 固定宽度，确保所有白键宽度完全一致
             # 使用Fixed策略
-            btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-            # 应用主题样式
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            # 应用主题样式（不固定字体大小，使用全局字体）
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: white;
                     border: 1px solid {theme.get_color('border')};
-                    font-size: 11px;
                     padding: 2px;
                 }}
                 QPushButton:hover {{
@@ -284,18 +282,17 @@ class PianoKeyboardWidget(QWidget):
         for col, note_name in black_positions:
             btn = MultilineButton(note_name)
             btn.setCheckable(True)
-            btn.setMinimumHeight(50)  # 黑键高度
-            btn.setMaximumHeight(50)  # 限制最大高度
+            btn.setMinimumHeight(40)  # 黑键稍大一些，更易点击，随高度拉伸
+            btn.setMaximumHeight(180)
             btn.setFixedWidth(40)  # 固定宽度，确保所有黑键宽度完全一致
             # 使用Fixed策略
-            btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-            # 应用主题样式（theme已在上面定义）
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            # 应用主题样式（同样不固定字体大小）
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {theme.get_color('text_primary')};
                     color: white;
                     border: 1px solid {theme.get_color('border_dark')};
-                    font-size: 10px;
                     padding: 2px;
                 }}
                 QPushButton:hover {{
@@ -323,11 +320,11 @@ class PianoKeyboardWidget(QWidget):
         wrapper_layout.addStretch()
         wrapper_layout.setContentsMargins(0, 0, 0, 0)
         container_wrapper.setLayout(wrapper_layout)
-        # 确保wrapper不会裁剪内容，高度与keys_container一致
-        container_wrapper.setMinimumHeight(170)
-        container_wrapper.setMaximumHeight(170)
+        # wrapper 跟随 keys_container，高度完全由外层布局控制
+        container_wrapper.setMinimumHeight(140)
+        container_wrapper.setMaximumHeight(400)
         
-        layout.addWidget(container_wrapper)
+        layout.addWidget(container_wrapper, 1)
         
         # 休止符按钮区域（在钢琴键盘下方）
         self.rest_button_container = QWidget()

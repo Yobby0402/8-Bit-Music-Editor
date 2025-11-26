@@ -66,6 +66,42 @@ class Theme(ABC):
         
         # 匹配 font-size: XXpx; 模式
         style = re.sub(r'font-size:\s*(\d+)px;', replace_font_size, style)
+
+        # 根据设置可选地将整体背景改为渐变（仅对主要容器类组件生效）
+        try:
+            from ui.settings_manager import get_settings_manager
+            sm = get_settings_manager()
+            if sm.is_background_gradient_enabled() and component in {
+                "main_window", "menu_bar", "menu", "toolbar", "status_bar", "dialog", "tab_widget"
+            }:
+                color1 = sm.get_ui_background_color()
+                color2 = sm.get_background_gradient_color2()
+                mode = sm.get_background_gradient_mode()
+
+                # 构建 Qt 样式表中的渐变语句
+                if mode == "center":
+                    bg_image = f"background-image: qradialgradient(cx:0.5, cy:0.5, radius:1, fx:0.5, fy:0.5, stop:0 {color1}, stop:1 {color2});"
+                elif mode == "top_bottom":
+                    bg_image = f"background-image: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {color1}, stop:1 {color2});"
+                elif mode == "bottom_top":
+                    bg_image = f"background-image: qlineargradient(x1:0, y1:1, x2:0, y2:0, stop:0 {color1}, stop:1 {color2});"
+                elif mode == "left_right":
+                    bg_image = f"background-image: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {color1}, stop:1 {color2});"
+                elif mode == "right_left":
+                    bg_image = f"background-image: qlineargradient(x1:1, y1:0, x2:0, y2:0, stop:0 {color1}, stop:1 {color2});"
+                elif mode == "diagonal":
+                    bg_image = f"background-image: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {color1}, stop:1 {color2});"
+                else:
+                    bg_image = ""
+
+                if bg_image:
+                    # 将原来的 background-color 替换为渐变（保留第一个 background-color，用于 fallback）
+                    def repl_bg(match):
+                        return f"background-color: {color1}; {bg_image}"
+                    style = re.sub(r'background-color:\s*#[0-9A-Fa-f]{6};', repl_bg, style, count=1)
+        except Exception:
+            pass
+
         return style
     
     def lighten_color(self, color: str, factor: float = 0.2) -> str:
@@ -105,7 +141,8 @@ class JasmineSnowTheme(Theme):
     
     @property
     def colors(self) -> Dict[str, str]:
-        return {
+        # 基础主题色（作为默认值存在）
+        base_colors = {
             # 主色调 - 浅绿到奶白渐变
             "primary": "#E8F5E9",      # 浅绿色（主背景）
             "primary_light": "#F1F8F4", # 更浅的绿色
@@ -147,10 +184,49 @@ class JasmineSnowTheme(Theme):
             "selection": "#C5E1A5",    # 选中（浅绿）
             "hover": "#E8F5E9",        # 悬停（浅绿）
         }
+        
+        # 允许通过设置管理器覆盖部分背景和前景相关颜色，使“整体主题”与设置保持一致
+        try:
+            from ui.settings_manager import get_settings_manager
+            settings_manager = get_settings_manager()
+            custom_bg = settings_manager.get_ui_background_color()
+            custom_fg = settings_manager.get_ui_foreground_color()
+            if custom_bg:
+                # 所有背景类颜色统一为用户指定的背景色，避免出现一块块不同白底
+                base_colors["background"] = custom_bg
+                base_colors["background_light"] = custom_bg
+                base_colors["background_dark"] = custom_bg
+                # 主要区域也尽量使用同一背景色
+                base_colors["primary"] = custom_bg
+                base_colors["primary_light"] = custom_bg
+                base_colors["primary_dark"] = custom_bg
+                base_colors["secondary"] = custom_bg
+                base_colors["secondary_light"] = custom_bg
+                base_colors["secondary_dark"] = custom_bg
+            if custom_fg:
+                # 主文字颜色使用前景色设置
+                base_colors["text_primary"] = custom_fg
+                # 次要文字也稍微跟随（必要时可以再细分）
+                base_colors["text_secondary"] = custom_fg
+        except Exception:
+            # 设置管理器初始化前或任何异常时，使用默认主题颜色
+            pass
+        
+        return base_colors
     
     @property
     def styles(self) -> Dict[str, str]:
         colors = self.colors
+        # 读取按钮字体设置
+        try:
+            from ui.settings_manager import get_settings_manager
+            sm = get_settings_manager()
+            btn_size = sm.get_button_font_size()
+            btn_family = sm.get_button_font_family()
+        except Exception:
+            btn_size = 11
+            btn_family = ""
+        button_font_family_css = f"font-family: '{btn_family}';" if btn_family else ""
         return {
             # 主窗口样式
             "main_window": f"""
@@ -168,7 +244,8 @@ class JasmineSnowTheme(Theme):
                     border: 2px solid {colors['accent_dark']};
                     border-radius: 6px;
                     padding: 8px 16px;
-                    font-size: 13px;
+                    font-size: {btn_size}px;
+                    {button_font_family_css}
                     font-weight: 500;
                     min-height: 32px;
                 }}
@@ -195,7 +272,8 @@ class JasmineSnowTheme(Theme):
                     border: 1px solid {colors['accent_dark']};
                     border-radius: 4px;
                     padding: 4px 12px;
-                    font-size: 11px;
+                    font-size: {max(8, btn_size - 2)}px;
+                    {button_font_family_css}
                     font-weight: 500;
                     min-height: 24px;
                     max-height: 24px;
@@ -217,7 +295,8 @@ class JasmineSnowTheme(Theme):
                     border: 2px solid {colors['border']};
                     border-radius: 6px;
                     padding: 6px 14px;
-                    font-size: 12px;
+                    font-size: {max(8, btn_size - 1)}px;
+                    {button_font_family_css}
                     font-weight: 500;
                     min-height: 30px;
                 }}
@@ -493,7 +572,20 @@ class ThemeManager:
     
     def get_color(self, key: str) -> str:
         """获取颜色值"""
-        return self._current_theme.get_color(key)
+        # 先从当前主题获取默认颜色
+        base_color = self._current_theme.get_color(key)
+        try:
+            # 允许通过设置管理器覆盖部分关键颜色（如背景色和主文字色）
+            from ui.settings_manager import get_settings_manager
+            settings_manager = get_settings_manager()
+            if key == "background":
+                return settings_manager.get_ui_background_color() or base_color
+            if key == "text_primary":
+                return settings_manager.get_ui_foreground_color() or base_color
+        except Exception:
+            # 出现任何问题时回退到主题默认颜色，避免循环依赖或初始化顺序问题
+            pass
+        return base_color
     
     def get_style(self, component: str) -> str:
         """获取组件样式"""

@@ -20,6 +20,7 @@ class PlaybackState:
     current_time: float = 0.0
     loop_start: float = 0.0
     loop_end: Optional[float] = None
+    end_time: float = 0.0  # 实际音频结束时间（秒），用于精确控制播放线与停止时刻
 
 
 class Sequencer:
@@ -254,6 +255,10 @@ class Sequencer:
         if len(audio) == 0:
             return
         
+        # 根据生成的音频长度计算真实结束时间，用于播放线和停止逻辑
+        duration = len(audio) / float(self.audio_engine.sample_rate)
+        self.playback_state.end_time = start_time + duration
+        
         # 播放音频
         self._current_sound = self.audio_engine.play_audio(audio, loop=loop)
         self.playback_state.is_playing = True
@@ -271,6 +276,7 @@ class Sequencer:
         self._current_sound = None
         self.playback_state.is_playing = False
         self.playback_state.current_time = 0.0
+        self.playback_state.end_time = 0.0
     
     def set_loop_region(self, start_time: float, end_time: Optional[float] = None) -> None:
         """

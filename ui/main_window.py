@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
     QProgressDialog
 )
 from PyQt5.QtCore import Qt, QTimer, QSettings
-from PyQt5.QtGui import QIcon, QKeySequence, QKeyEvent, QFont
+from PyQt5.QtGui import QIcon, QKeySequence, QKeyEvent, QFont, QBrush, QColor
 import os
 
 from core.sequencer import Sequencer
@@ -30,6 +30,7 @@ from ui.theme import theme_manager
 from ui.shortcut_manager import get_shortcut_manager
 from ui.shortcut_config_dialog import ShortcutConfigDialog
 from PyQt5.QtWidgets import QStackedWidget, QTabWidget, QPushButton, QButtonGroup, QSpinBox
+from ui.settings_manager import get_settings_manager
 
 
 class MainWindow(QMainWindow):
@@ -48,6 +49,8 @@ class MainWindow(QMainWindow):
         
         # 初始化快捷键管理器
         self.shortcut_manager = get_shortcut_manager()
+        # 设置管理器
+        self.settings_manager = get_settings_manager()
         
         self.init_ui()
         self.setup_menu()
@@ -55,10 +58,11 @@ class MainWindow(QMainWindow):
         self.setup_statusbar()
         self.setup_shortcuts()
         
-        # 定时器用于更新播放状态和播放头
+        # 定时器用于更新播放状态和播放头（刷新间隔从设置中读取）
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.update_playback_status)
-        self.update_timer.start(50)  # 每50ms更新一次（更流畅）
+        # 使用已经初始化好的 settings_manager，避免重复导入和局部变量遮蔽
+        self.update_timer.start(self.settings_manager.get_playhead_refresh_interval())
         
         # 播放开始时间（用于计算播放位置）
         self.playback_start_time = None
@@ -248,13 +252,8 @@ class MainWindow(QMainWindow):
         # 应用主题
         self.apply_theme()
         
-        # 设置中央部件和各个区域的背景色（统一使用background颜色）
-        theme = theme_manager.current_theme
-        bg_color = theme.get_color('background')
-        central_widget.setStyleSheet(f"background-color: {bg_color};")
-        note_selection_area.setStyleSheet(f"background-color: {bg_color};")
-        track_area.setStyleSheet(f"background-color: {bg_color};")
-        playback_control_area.setStyleSheet(f"background-color: {bg_color};")
+        # 应用显示相关设置（背景/前景色等）
+        self.apply_display_settings_from_settings(central_widget, note_selection_area, track_area, playback_control_area)
         
         # 不再自动创建默认音轨（用户需要手动创建）
         # self.init_default_tracks()
@@ -264,68 +263,143 @@ class MainWindow(QMainWindow):
     
     def apply_theme(self):
         """应用主题到所有UI组件"""
-        theme = theme_manager.current_theme
+        # 使用统一主题应用方法，将所有样式（包括按钮/标签/菜单等）一次性应用到主窗口，
+        # 确保按钮字体和风格全局统一。
+        theme_manager.apply_to_widget(self)
         
-        # 主窗口背景
-        self.setStyleSheet(theme.get_style("main_window"))
-        
-        # 菜单栏
-        if hasattr(self, 'menuBar'):
-            self.menuBar().setStyleSheet(theme.get_style("menu_bar"))
-        
-        # 工具栏
-        if hasattr(self, 'toolbar'):
-            self.toolbar.setStyleSheet(theme.get_style("toolbar"))
-        
-        # 状态栏
-        if hasattr(self, 'statusBar'):
-            self.statusBar().setStyleSheet(theme.get_style("status_bar"))
-        
-        # 按钮样式
-        button_style = theme.get_style("button")
-        button_small_style = theme.get_style("button_small")
-        
-        # 播放控制按钮（应用主题样式）
-        if hasattr(self, 'play_stop_button'):
-            self.play_stop_button.setStyleSheet(button_style)
-        if hasattr(self, 'stop_button'):
-            self.stop_button.setStyleSheet(button_style)
-        # 添加音轨按钮现在在序列编辑器中
-        if hasattr(self, 'sequence_widget') and hasattr(self.sequence_widget, 'add_track_button'):
-            self.sequence_widget.add_track_button.setStyleSheet(button_small_style)
-        
-        # 标签样式
-        label_style = theme.get_style("label")
-        if hasattr(self, 'status_info_label'):
-            self.status_info_label.setStyleSheet(label_style)
-        if hasattr(self, 'volume_label'):
-            self.volume_label.setStyleSheet(label_style)
-        
-        # 滑块样式
-        if hasattr(self, 'volume_slider'):
-            self.volume_slider.setStyleSheet(theme.get_style("slider"))
-        
-        # 输入框样式
-        if hasattr(self, 'bpm_spinbox'):
-            # SpinBox使用类似LineEdit的样式
-            self.bpm_spinbox.setStyleSheet(theme.get_style("line_edit"))
-        
-        # 视图切换按钮（已替换为拨动开关，不需要应用样式）
-        
-        # 属性面板
-        if hasattr(self, 'property_dock'):
-            self.property_dock.setStyleSheet(theme.get_style("dialog"))
-        
-        # 示波器widget（确保主题应用）
+        # 个别子组件仍有自定义逻辑（如示波器需要额外应用主题）
         if hasattr(self, 'oscilloscope_widget'):
             self.oscilloscope_widget.apply_theme()
+    
+    def apply_display_settings_from_settings(self, central_widget=None, note_selection_area=None,
+                                             track_area=None, playback_control_area=None):
+        """根据设置管理器应用显示相关设置（背景色/前景色/字体大小）"""
+        bg_color = self.settings_manager.get_ui_background_color()
+        fg_color = self.settings_manager.get_ui_foreground_color()
+        try:
+            gradient_enabled = self.settings_manager.is_background_gradient_enabled()
+            grad_color2 = self.settings_manager.get_background_gradient_color2()
+            grad_mode = self.settings_manager.get_background_gradient_mode()
+        except Exception:
+            gradient_enabled = False
+            grad_color2 = bg_color
+            grad_mode = "none"
         
-        # 节拍器widget（确保主题应用）
-        if hasattr(self, 'metronome_widget'):
-            if hasattr(self.metronome_widget, 'toggle_button'):
-                self.metronome_widget.toggle_button.setStyleSheet(button_style)
-            if hasattr(self.metronome_widget, 'bpm_label'):
-                self.metronome_widget.bpm_label.setStyleSheet(label_style)
+        # 全局字体大小（通过QApplication设置，保证大部分控件生效）
+        try:
+            app = QApplication.instance()
+            if app is not None:
+                font = app.font()
+                font.setPointSize(self.settings_manager.get_ui_font_size())
+                app.setFont(font)
+        except Exception:
+            pass
+        
+        # 背景色应用到主要区域
+        if central_widget is None:
+            central_widget = self.centralWidget()
+        if central_widget is not None:
+            if gradient_enabled and grad_mode != "none":
+                # 根据模式构建渐变样式，直接作用在中央部件上，确保肉眼可见
+                if grad_mode == "center":
+                    bg_image = f"background-image: qradialgradient(cx:0.5, cy:0.5, radius:1, fx:0.5, fy:0.5, stop:0 {bg_color}, stop:1 {grad_color2});"
+                elif grad_mode == "top_bottom":
+                    bg_image = f"background-image: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {bg_color}, stop:1 {grad_color2});"
+                elif grad_mode == "bottom_top":
+                    bg_image = f"background-image: qlineargradient(x1:0, y1:1, x2:0, y2:0, stop:0 {bg_color}, stop:1 {grad_color2});"
+                elif grad_mode == "left_right":
+                    bg_image = f"background-image: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {bg_color}, stop:1 {grad_color2});"
+                elif grad_mode == "right_left":
+                    bg_image = f"background-image: qlineargradient(x1:1, y1:0, x2:0, y2:0, stop:0 {bg_color}, stop:1 {grad_color2});"
+                elif grad_mode == "diagonal":
+                    bg_image = f"background-image: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {bg_color}, stop:1 {grad_color2});"
+                else:
+                    bg_image = ""
+                if bg_image:
+                    central_widget.setStyleSheet(f"background-color: {bg_color}; {bg_image}")
+                else:
+                    central_widget.setStyleSheet(f"background-color: {bg_color};")
+            else:
+                # 未启用渐变时使用纯色背景
+                central_widget.setStyleSheet(f"background-color: {bg_color};")
+
+        # 子区域采用透明样式，继承中央部件的背景（包括渐变）
+        for area in (note_selection_area, track_area, playback_control_area):
+            if area is not None:
+                area.setStyleSheet("background: transparent;")
+        
+        # 状态栏前景色
+        if self.statusBar() is not None:
+            self.statusBar().setStyleSheet(f"color: {fg_color};")
+
+    def refresh_theme_from_settings(self):
+        """
+        从当前设置重新应用主题和样式。
+        点击设置对话框中的“应用/确定”后调用，确保无需重启即可看到效果。
+        """
+        # 重新应用主窗口主题（菜单栏/工具栏/状态栏/按钮等）
+        self.apply_theme()
+        # 重新应用背景/前景色、字体等
+        self.apply_display_settings_from_settings()
+
+        # 根据设置刷新播放线刷新率（应用后立即生效）
+        try:
+            from ui.settings_manager import get_settings_manager
+            settings_manager = get_settings_manager()
+            if hasattr(self, "update_timer") and self.update_timer is not None:
+                interval = settings_manager.get_playhead_refresh_interval()
+                self.update_timer.setInterval(interval)
+        except Exception:
+            # 安全兜底：不要因为刷新失败导致设置对话框崩溃
+            pass
+
+        theme = theme_manager.current_theme
+
+        # 更新序列编辑器背景、网格和按钮样式
+        if hasattr(self, "sequence_widget"):
+            bg = QColor(theme.get_color("background"))
+            if hasattr(self.sequence_widget, "view"):
+                self.sequence_widget.view.setBackgroundBrush(QBrush(bg))
+            if hasattr(self.sequence_widget, "draw_grid"):
+                self.sequence_widget.draw_grid()
+            # 统一小按钮风格（添加/删除音轨、渲染按钮等）
+            button_small_style = theme.get_style("button_small")
+            for btn_name in ("add_track_button", "delete_track_button", "render_waveform_button"):
+                if hasattr(self.sequence_widget, btn_name):
+                    btn = getattr(self.sequence_widget, btn_name)
+                    if btn is not None:
+                        btn.setStyleSheet(button_small_style)
+            # 进度条主题
+            if hasattr(self.sequence_widget, "progress_bar"):
+                try:
+                    self.sequence_widget.progress_bar.apply_theme()
+                except Exception:
+                    pass
+
+        # 更新统一编辑器背景和按钮样式（钢琴区域 / 波形按钮 / 节拍长度等）
+        if hasattr(self, "unified_editor"):
+            try:
+                bg = theme.get_color("background")
+                self.unified_editor.setStyleSheet(f"background-color: {bg};")
+                if hasattr(self.unified_editor, "apply_theme_to_buttons"):
+                    self.unified_editor.apply_theme_to_buttons()
+            except Exception:
+                pass
+
+        # 更新示波器等子组件的主题
+        if hasattr(self, "oscilloscope_widget"):
+            try:
+                self.oscilloscope_widget.apply_theme()
+            except Exception:
+                pass
+
+        # 刷新主界面数据和重绘
+        if hasattr(self, "refresh_ui"):
+            # 保留选择并强制全量刷新，使颜色/字体在所有区域立即生效
+            self.refresh_ui(preserve_selection=True, force_full_refresh=True)
+
+        # 最后强制重绘窗口
+        self.repaint()
     
     
     def init_default_tracks(self):
@@ -1125,20 +1199,13 @@ class MainWindow(QMainWindow):
         stop_action.triggered.connect(self.stop)
         play_menu.addAction(stop_action)
         
-        # 设置菜单
+        # 设置菜单（统一入口）
         settings_menu = menubar.addMenu("设置(&S)")
         
-        # 设置对话框（统一设置窗口）
+        # 统一设置窗口：包括显示设置 / 示波器设置 / 快捷键设置等所有配置
         settings_action = QAction("设置(&S)...", self)
         settings_action.triggered.connect(self.show_settings)
         settings_menu.addAction(settings_action)
-        
-        settings_menu.addSeparator()
-        
-        # 快捷键配置
-        shortcut_action = QAction("快捷键配置(&K)...", self)
-        shortcut_action.triggered.connect(self.show_shortcut_config)
-        settings_menu.addAction(shortcut_action)
         
         # 帮助菜单
         help_menu = menubar.addMenu("帮助(&H)")
@@ -1481,19 +1548,18 @@ class MainWindow(QMainWindow):
             # 获取当前选择的默认波形（从统一编辑器）
             default_waveform = self.unified_editor.selected_waveform
             
-            # 获取设置
-            from ui.settings_manager import get_settings_manager
-            settings_manager = get_settings_manager()
-            snap_to_beat = settings_manager.is_snap_to_beat_enabled()
-            allow_overlap = settings_manager.is_overlap_allowed()
-            
             progress.setLabelText("正在导入MIDI文件...")
             progress.setValue(40)
             QApplication.processEvents()
             
-            # 导入MIDI文件，使用默认波形和设置
-            project = MidiIO.import_midi(file_path, default_waveform=default_waveform,
-                                        snap_to_beat=snap_to_beat, allow_overlap=allow_overlap)
+            # 导入MIDI文件：为保证忠实还原原始MIDI，这里强制关闭吸附并允许重叠，
+            # 避免在导入阶段移动音符位置或修改节奏结构。
+            project = MidiIO.import_midi(
+                file_path,
+                default_waveform=default_waveform,
+                snap_to_beat=False,   # 不在导入时对齐到拍
+                allow_overlap=True    # 允许音符重叠（保持和声/和弦结构）
+            )
             
             progress.setLabelText("正在设置项目...")
             progress.setValue(60)
@@ -1834,7 +1900,8 @@ class MainWindow(QMainWindow):
                 self.unified_editor.set_preview_enabled(False)
             
             # 检查是否播放完毕（简化：如果播放头超过项目总时长，停止）
-            total_duration = self.sequencer.project.get_total_duration()
+            # 优先使用音频真实结束时间（适配导入MIDI时BPM变化的情况）
+            total_duration = self.sequencer.playback_state.end_time or self.sequencer.project.get_total_duration()
             if current_time >= total_duration:
                 self.stop()
         elif not self.sequencer.playback_state.is_playing:
@@ -1957,13 +2024,24 @@ class MainWindow(QMainWindow):
     def show_settings(self):
         """显示设置对话框"""
         from ui.settings_dialog import SettingsDialog
-        dialog = SettingsDialog(self)
+        # 将示波器widget传给设置对话框，便于直接调整相关参数
+        osc_widget = getattr(self, "oscilloscope_widget", None)
+        dialog = SettingsDialog(self, oscilloscope_widget=osc_widget)
         if dialog.exec_() == QDialog.Accepted:
             self.statusBar().showMessage("设置已更新")
     
     def show_shortcut_config(self):
         """显示快捷键配置对话框"""
-        dialog = ShortcutConfigDialog(self)
+        # 现在在统一的设置对话框中进行快捷键配置，并自动切换到“快捷键”标签页
+        from ui.settings_dialog import SettingsDialog
+        osc_widget = getattr(self, "oscilloscope_widget", None)
+        dialog = SettingsDialog(self, oscilloscope_widget=osc_widget)
+        # 切换到“快捷键”分类
+        for i in range(dialog.category_list.count()):
+            item = dialog.category_list.item(i)
+            if item and item.text() == "快捷键":
+                dialog.category_list.setCurrentRow(i)
+                break
         if dialog.exec_() == QDialog.Accepted:
             # 重新设置快捷键
             self.setup_shortcuts()

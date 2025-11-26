@@ -151,14 +151,16 @@ class SequenceBlock(QGraphicsItem):
         self.original_y = track_y  # 保存原始Y坐标，用于限制拖动
         self.parent_widget = parent_widget  # 保存父widget引用，用于重叠检测
         
-        # 波形颜色映射
+        # 波形颜色映射（可从设置管理器中配置）
         from core.models import WaveformType
+        from ui.settings_manager import get_settings_manager
+        sm = get_settings_manager()
         waveform_colors = {
-            WaveformType.SQUARE: QColor(255, 107, 107),    # 红色 #FF6B6B
-            WaveformType.TRIANGLE: QColor(78, 205, 196),   # 青色 #4ECDC4
-            WaveformType.SAWTOOTH: QColor(255, 230, 109), # 黄色 #FFE66D
-            WaveformType.SINE: QColor(149, 225, 211),     # 浅绿色 #95E1D3
-            WaveformType.NOISE: QColor(150, 150, 150),    # 灰色
+            WaveformType.SQUARE: QColor(sm.get_waveform_color("waveform_color_square")),    # 方波
+            WaveformType.TRIANGLE: QColor(sm.get_waveform_color("waveform_color_triangle")),   # 三角波
+            WaveformType.SAWTOOTH: QColor(sm.get_waveform_color("waveform_color_sawtooth")), # 锯齿波
+            WaveformType.SINE: QColor(sm.get_waveform_color("waveform_color_sine")),     # 正弦波
+            WaveformType.NOISE: QColor(sm.get_waveform_color("waveform_color_noise")),    # 噪声
         }
         
         # 根据类型设置颜色和标签
@@ -542,7 +544,8 @@ class GridSequenceWidget(QWidget):
         self.track_list_layout.setSpacing(0)
         self.track_list_widget.setLayout(self.track_list_layout)
         self.track_list_widget.setFixedWidth(150)  # 固定宽度150px
-        self.track_list_widget.setStyleSheet("background-color: " + theme_manager.current_theme.get_color("background") + ";")
+        # 背景透明，让其继承主界面的背景色/渐变
+        self.track_list_widget.setStyleSheet("background: transparent;")
         
         # 存储音轨项（勾选框和标签）
         self.track_list_items = []  # [(checkbox, label, track), ...]
@@ -608,7 +611,8 @@ class GridSequenceWidget(QWidget):
         # 设置视图背景色为主题色
         theme = theme_manager.current_theme
         self.view.setBackgroundBrush(QBrush(QColor(theme.get_color("background"))))
-        self.view.setStyleSheet(f"background-color: {theme.get_color('background')};")
+        # 使用透明样式，让主窗口背景（包括颜色/渐变）透出
+        self.view.setStyleSheet("background: transparent;")
         
         # 将视图添加到splitter的右侧
         splitter.addWidget(self.view)

@@ -17,6 +17,27 @@ class SettingsManager(QObject):
     DEFAULT_SETTINGS = {
         "snap_to_beat": True,      # 是否吸附对齐到节拍
         "allow_overlap": False,    # 是否允许重叠
+        # 播放相关
+        "playhead_refresh_interval_ms": 50,    # 播放线刷新间隔（毫秒），默认50ms≈20FPS
+        # 显示与主题相关设置
+        "ui_background_color": "#FAFAFA",   # 全局背景色
+        "ui_foreground_color": "#2E7D32",   # 全局前景/文字主色
+        "ui_font_size": 10,                 # 全局基础字体大小（点数）
+        "ui_font_family": "",               # 全局字体（空表示使用系统/Qt默认，如微软雅黑等）
+        # 按钮字体（独立于全局字体）
+        "ui_button_font_size": 11,
+        "ui_button_font_family": "",
+        # 背景渐变设置
+        "ui_background_gradient_enabled": False,      # 是否启用背景渐变
+        "ui_background_gradient_color2": "#FFFFFF",   # 渐变第二颜色
+        # 渐变模式：none/center/top_bottom/bottom_top/left_right/right_left/diagonal
+        "ui_background_gradient_mode": "none",
+        # 不同波形的主题色（用于网格音符、可视化等）
+        "waveform_color_square": "#FF6B6B",
+        "waveform_color_triangle": "#4ECDC4",
+        "waveform_color_sawtooth": "#FFE66D",
+        "waveform_color_sine": "#95E1D3",
+        "waveform_color_noise": "#969696",
     }
     
     def __init__(self, parent=None):
@@ -92,6 +113,101 @@ class SettingsManager(QObject):
     def set_allow_overlap(self, allowed: bool):
         """设置是否允许重叠"""
         self.set("allow_overlap", allowed)
+
+    # 播放线刷新率相关
+    def get_playhead_refresh_interval(self) -> int:
+        """获取播放线刷新间隔（毫秒）"""
+        return int(self.get("playhead_refresh_interval_ms", self.DEFAULT_SETTINGS["playhead_refresh_interval_ms"]))
+
+    def set_playhead_refresh_interval(self, interval_ms: int):
+        """设置播放线刷新间隔（毫秒）"""
+        interval_ms = max(10, min(200, int(interval_ms)))  # 限制在10-200ms之间
+        self.set("playhead_refresh_interval_ms", interval_ms)
+    
+    # ===== 显示相关便捷方法 =====
+    def get_ui_background_color(self) -> str:
+        """获取全局背景色（十六进制字符串）"""
+        return self.get("ui_background_color", self.DEFAULT_SETTINGS["ui_background_color"])
+    
+    def set_ui_background_color(self, color: str):
+        """设置全局背景色"""
+        self.set("ui_background_color", color)
+    
+    def get_ui_foreground_color(self) -> str:
+        """获取全局前景色（主要文字颜色）"""
+        return self.get("ui_foreground_color", self.DEFAULT_SETTINGS["ui_foreground_color"])
+    
+    def set_ui_foreground_color(self, color: str):
+        """设置全局前景色"""
+        self.set("ui_foreground_color", color)
+    
+    def get_ui_font_size(self) -> int:
+        """获取全局基础字体大小（点数）"""
+        return int(self.get("ui_font_size", self.DEFAULT_SETTINGS["ui_font_size"]))
+    
+    def set_ui_font_size(self, size: int):
+        """设置全局基础字体大小（点数）"""
+        self.set("ui_font_size", int(size))
+    
+    def get_ui_font_family(self) -> str:
+        """获取全局字体族名称"""
+        return self.get("ui_font_family", self.DEFAULT_SETTINGS["ui_font_family"])
+    
+    def set_ui_font_family(self, family: str):
+        """设置全局字体族名称"""
+        self.set("ui_font_family", family or "")
+    
+    # 波形主题色
+    def get_waveform_color(self, waveform_key: str) -> str:
+        """根据键名获取波形颜色"""
+        default = self.DEFAULT_SETTINGS.get(waveform_key, "#FFFFFF")
+        return self.get(waveform_key, default)
+    
+    def set_waveform_color(self, waveform_key: str, color: str):
+        """设置波形颜色"""
+        self.set(waveform_key, color)
+    
+    # 背景渐变相关
+    def is_background_gradient_enabled(self) -> bool:
+        """是否启用背景渐变"""
+        return bool(self.get("ui_background_gradient_enabled", False))
+    
+    def set_background_gradient_enabled(self, enabled: bool):
+        """设置是否启用背景渐变"""
+        self.set("ui_background_gradient_enabled", bool(enabled))
+    
+    def get_background_gradient_color2(self) -> str:
+        """获取背景渐变第二颜色"""
+        return self.get("ui_background_gradient_color2", self.DEFAULT_SETTINGS["ui_background_gradient_color2"])
+    
+    def set_background_gradient_color2(self, color: str):
+        """设置背景渐变第二颜色"""
+        self.set("ui_background_gradient_color2", color)
+    
+    def get_background_gradient_mode(self) -> str:
+        """获取背景渐变模式"""
+        return self.get("ui_background_gradient_mode", self.DEFAULT_SETTINGS["ui_background_gradient_mode"])
+    
+    def set_background_gradient_mode(self, mode: str):
+        """设置背景渐变模式"""
+        self.set("ui_background_gradient_mode", mode or "none")
+
+    # 按钮字体相关
+    def get_button_font_size(self) -> int:
+        """获取按钮字体大小"""
+        return int(self.get("ui_button_font_size", self.DEFAULT_SETTINGS["ui_button_font_size"]))
+
+    def set_button_font_size(self, size: int):
+        """设置按钮字体大小"""
+        self.set("ui_button_font_size", int(size))
+
+    def get_button_font_family(self) -> str:
+        """获取按钮字体族"""
+        return self.get("ui_button_font_family", self.DEFAULT_SETTINGS["ui_button_font_family"])
+
+    def set_button_font_family(self, family: str):
+        """设置按钮字体族"""
+        self.set("ui_button_font_family", family or "")
 
 
 # 全局设置管理器实例

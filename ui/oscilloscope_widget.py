@@ -75,9 +75,13 @@ class OscilloscopeWidget(QWidget):
         
         # 当前播放时间（由外部设置）
         self.current_time = 0.0
-        self.last_update_time = 0.0  # 用于平滑时间更新
-        self.internal_time = 0.0  # 内部时间跟踪，用于平滑动画
+        # 内部时间（用于动画），后面会简化为直接使用current_time，避免双重时间轴导致抖动
+        self.internal_time = 0.0
         self.is_playing = False
+        # 固定采样网格配置，用于稳定波形采样，避免每帧抖动
+        self.visible_window = 5.0  # 可见时间窗口（秒）
+        self.num_samples = 1000    # 每个通道的采样点数（固定），与时间窗口一起决定time_step
+        self.time_step = self.visible_window / self.num_samples
         
         # 通道颜色（为每个通道分配不同颜色）
         self.channel_colors = [
@@ -235,17 +239,9 @@ class OscilloscopeWidget(QWidget):
     
     def set_current_time(self, current_time: float):
         """设置当前播放时间"""
-        # 平滑时间更新，避免跳跃
-        if abs(current_time - self.current_time) > 0.1:
-            # 如果时间跳跃太大，直接更新（可能是跳转）
-            self.current_time = current_time
-            self.internal_time = current_time
-        else:
-            # 否则平滑更新
-            self.current_time = current_time
-            # 内部时间用于平滑动画，但不超过外部时间
-            if self.internal_time < current_time:
-                self.internal_time = current_time
+        # 简化为直接使用当前时间，避免双重时间轴导致的视觉抖动
+        self.current_time = current_time
+        self.internal_time = current_time
     
     def set_playing(self, is_playing: bool):
         """设置播放状态"""
@@ -332,6 +328,15 @@ class OscilloscopeWidget(QWidget):
             duty_cycle=note.duty_cycle
         )
         
+        # 在每个音符前后各添加约3%的0电平，用于视觉上分隔音符（仅影响示波器显示，不影响真实音频）
+        try:
+            pad_samples = max(1, int(len(waveform) * 0.03))
+            zero_pad = np.zeros(pad_samples, dtype=np.float32)
+            waveform = np.concatenate([zero_pad, waveform, zero_pad])
+        except Exception:
+            # 任何异常都回退到原始波形，避免崩溃
+            pass
+        
         # 对波形进行采样以适应显示
         # 使用更智能的采样方法，保持频率特征
         if len(waveform) > num_samples:
@@ -400,30 +405,7 @@ class OscilloscopeWidget(QWidget):
     
     def update_waveforms(self):
         """更新波形显示"""
-        # 如果正在播放，平滑更新内部时间
-        if self.is_playing:
-            import time
-            if not hasattr(self, 'last_animation_time'):
-                self.last_animation_time = time.time()
-            
-            current_real_time = time.time()
-            elapsed = current_real_time - self.last_animation_time
-            self.last_animation_time = current_real_time
-            
-            # 平滑更新内部时间（用于动画）
-            # 内部时间跟随外部时间，但可以稍微平滑
-            if self.internal_time < self.current_time:
-                self.internal_time = self.current_time
-            elif self.is_playing:
-                # 如果正在播放，内部时间可以稍微超前以保持平滑
-                # 但不要超过外部时间太多
-                max_ahead = 0.05  # 最多超前50ms
-                if self.internal_time < self.current_time + max_ahead:
-                    self.internal_time += elapsed  # 平滑前进
-                else:
-                    self.internal_time = self.current_time
-        
-        # 触发重绘
+        # 直接根据当前时间重绘，时间推进统一由current_time控制，避免抖动
         self.update()
     
     def paintEvent(self, event):
@@ -618,81 +600,27 @@ class OscilloscopeWidget(QWidget):
                 channel_center_y
             )
             
-            # 生成连续波形（过去一点时间到未来preview_time秒）
+            # 生成连续波形（过去一段时间到当前播放时刻）
             if track.track_type == TrackType.NOTE_TRACK:
                 # 使用内部时间（平滑后的时间）计算位置，确保动画平滑
                 animation_time = self.internal_time if hasattr(self, 'internal_time') else self.current_time
                 
-                # 计算可见时间范围（从左侧到蜂鸣器的时间范围）
-                time_range_for_area = waveform_area_width / self.waveform_speed
+                # 使用固定时间窗口，保证“当前时间”准确落在蜂鸣器所在的红线上
+                # 可见时间范围：从 (current_time - visible_window) 到 current_time
+                time_range_for_area = self.visible_window
+                num_samples = self.num_samples
+                # 这里用 (num_samples - 1) 确保最后一个采样点严格对应当前时间
+                time_step = time_range_for_area / max(1, (num_samples - 1))
                 
-                # 固定采样点数量，避免每次重绘时变化
-                # 增加采样点密度，让波形更精细（每1像素一个采样点，最少500个点）
-                num_samples = max(500, int(waveform_area_width))  # 每1像素一个采样点，最少500个点
-                
-                # 使用固定的时间步长，确保采样点位置稳定
-                time_step = time_range_for_area / num_samples
-                
-                # 计算可见时间范围的起始点（对齐到时间步长，避免抖动）
-                # 将时间对齐到最近的time_step，确保采样点位置稳定
-                visible_start_time = animation_time - 1.0  # 过去1秒
-                # 对齐到时间步长
-                visible_start_time = int(visible_start_time / time_step) * time_step
-                visible_end_time = visible_start_time + time_range_for_area
+                visible_end_time = max(0.0, animation_time)
+                visible_start_time = max(0.0, visible_end_time - time_range_for_area)
                 
                 # 获取这个时间范围内的所有音符（稍微扩大范围以确保覆盖）
                 all_notes = self.get_notes_in_range(track, visible_start_time - 0.5, visible_end_time + 0.5)
                 
-                # 处理重叠音符：按优先级排序
-                # 优先级：时间靠后的 > 声音大的 > 音调高的
-                # 按开始时间降序排序（时间靠后的优先），然后按velocity和pitch降序
-                all_notes.sort(key=lambda n: (-n.start_time, -n.velocity, -n.pitch))
-                
-                # 使用列表存储要渲染的音符及其有效时间段
-                # 每个元素是 (note, start_time, end_time)
-                note_segments = []
-                
-                for note in all_notes:
-                    note_start = note.start_time
-                    note_end = note.start_time + note.duration
-                    
-                    # 找出与已有音符重叠的部分
-                    effective_start = note_start
-                    effective_end = note_end
-                    
-                    for existing_note, existing_start, existing_end in note_segments:
-                        # 检查是否有重叠
-                        if not (note_end <= existing_start or note_start >= existing_end):
-                            # 有重叠，从当前音符的有效时间段中移除重叠部分
-                            if existing_start <= note_start < existing_end:
-                                # 重叠在开始部分
-                                effective_start = existing_end
-                            if existing_start < note_end <= existing_end:
-                                # 重叠在结束部分
-                                effective_end = existing_start
-                            if note_start < existing_start and note_end > existing_end:
-                                # 当前音符完全包含已有音符，需要分割
-                                # 这种情况不应该发生，因为我们已经按优先级排序了
-                                # 但如果发生了，只保留不重叠的部分
-                                if effective_start < existing_start:
-                                    note_segments.append((note, effective_start, existing_start))
-                                effective_start = existing_end
-                    
-                    # 如果还有有效时间段，添加音符
-                    if effective_start < effective_end:
-                        note_segments.append((note, effective_start, effective_end))
-                
-                # 提取所有唯一的音符（用于生成波形）
-                filtered_notes = []
-                seen_note_ids = set()
-                for note, seg_start, seg_end in note_segments:
-                    note_id = id(note)
-                    if note_id not in seen_note_ids:
-                        filtered_notes.append(note)
-                        seen_note_ids.add(note_id)
-                
-                # 按开始时间排序
-                filtered_notes.sort(key=lambda n: n.start_time)
+                # 如果窗口内没有音符，跳过该通道
+                if not all_notes:
+                    continue
                 
                 # 初始化波形数组（全0，表示没有音符的地方）
                 continuous_waveform = np.zeros(num_samples, dtype=np.float32)
@@ -703,94 +631,80 @@ class OscilloscopeWidget(QWidget):
                     self.track_colors[track_key] = self.channel_colors[len(self.track_colors) % len(self.channel_colors)]
                 color = self.track_colors[track_key]
                 
-                # 为每个音符的有效时间段填充波形数据
-                for note, seg_start, seg_end in note_segments:
-                    # 计算有效时间段在可见时间范围内的位置
-                    seg_start_in_range = seg_start - visible_start_time
-                    seg_end_in_range = seg_end - visible_start_time
-                    
-                    # 计算在采样数组中的索引范围（使用固定的time_step）
-                    start_sample = int(seg_start_in_range / time_step)
-                    end_sample = int(seg_end_in_range / time_step) + 1  # +1确保覆盖结束点
-                    
-                    # 确保索引在有效范围内
-                    start_sample = max(0, min(num_samples - 1, start_sample))
-                    end_sample = max(0, min(num_samples, end_sample))
-                    
-                    if end_sample > start_sample:
-                        # 生成音符的波形
-                        note_key = (track_key, note.start_time, note.duration, note.pitch, note.waveform.value, note.duty_cycle)
-                        
-                        # 从缓存获取或生成完整波形
-                        if note_key not in self.waveform_cache:
-                            # 生成完整的音符波形
-                            # 确保采样点数足够多，能够显示频率差异和波形细节
-                            # 至少每个周期有20个采样点，才能清晰看到方波、锯齿波等特征
-                            frequency = self.audio_engine.waveform_generator.midi_to_frequency(note.pitch)
-                            samples_per_cycle = self.audio_engine.sample_rate / frequency if frequency > 0 else 100
-                            min_samples_per_cycle = 20  # 每个周期至少20个采样点，确保波形细节可见
-                            if samples_per_cycle < min_samples_per_cycle:
-                                # 如果采样率不够，提高采样率（用于显示）
-                                display_sample_rate = frequency * min_samples_per_cycle
-                            else:
-                                display_sample_rate = self.audio_engine.sample_rate
-                            
-                            # 增加采样点数，确保波形精细
-                            full_samples = max(500, int(note.duration * display_sample_rate))
-                            self.waveform_cache[note_key] = self.generate_pwm_waveform(note, note.duration, full_samples)
-                        
-                        full_waveform = self.waveform_cache[note_key]
-                        
-                        # 计算音符在整个持续时间中的相对位置
-                        note_duration = note.duration
-                        note_start_offset = seg_start - note.start_time
-                        note_end_offset = seg_end - note.start_time
-                        
-                        # 计算在音符波形中的采样范围
-                        note_start_ratio = note_start_offset / note_duration if note_duration > 0 else 0
-                        note_end_ratio = note_end_offset / note_duration if note_duration > 0 else 1
-                        note_start_ratio = max(0, min(1, note_start_ratio))
-                        note_end_ratio = max(0, min(1, note_end_ratio))
-                        
-                        # 提取音符波形的相应部分
-                        note_start_idx = int(note_start_ratio * len(full_waveform))
-                        note_end_idx = int(note_end_ratio * len(full_waveform))
-                        note_segment = full_waveform[note_start_idx:note_end_idx]
-                        
-                        # 将音符波形片段填充到连续波形数组中
-                        note_samples = end_sample - start_sample
-                        if len(note_segment) > 0:
-                            if len(note_segment) == note_samples:
-                                continuous_waveform[start_sample:end_sample] = note_segment
-                            elif len(note_segment) > note_samples:
-                                # 下采样：使用线性插值而不是简单跳跃，保持频率特征
-                                indices = np.linspace(0, len(note_segment) - 1, note_samples)
-                                continuous_waveform[start_sample:end_sample] = np.interp(
-                                    indices, np.arange(len(note_segment)), note_segment
-                                )
-                            else:
-                                # 上采样（线性插值）
-                                indices = np.linspace(0, len(note_segment) - 1, note_samples)
-                                continuous_waveform[start_sample:end_sample] = np.interp(
-                                    indices, np.arange(len(note_segment)), note_segment
-                                )
+                # 为窗口内所有音符预生成或获取完整波形（缓存）
+                # 使用id(note)作为键的一部分，避免Note不可哈希的问题
+                note_waveforms = {}
+                for note in all_notes:
+                    note_id = id(note)
+                    note_key = (track_key, note_id, note.start_time, note.duration, note.pitch, note.waveform.value, note.duty_cycle)
+                    if note_key not in self.waveform_cache:
+                        frequency = self.audio_engine.waveform_generator.midi_to_frequency(note.pitch)
+                        samples_per_cycle = self.audio_engine.sample_rate / frequency if frequency > 0 else 100
+                        min_samples_per_cycle = 20  # 每个周期至少20个采样点，确保波形细节可见
+                        if samples_per_cycle < min_samples_per_cycle:
+                            display_sample_rate = frequency * min_samples_per_cycle
+                        else:
+                            display_sample_rate = self.audio_engine.sample_rate
+                        full_samples = max(500, int(note.duration * display_sample_rate))
+                        self.waveform_cache[note_key] = self.generate_pwm_waveform(note, note.duration, full_samples)
+                    note_waveforms[note_id] = self.waveform_cache[note_key]
                 
-                # 现在计算每个采样点在屏幕上的x位置（基于当前时间）
-                # 波形从左侧移动到右侧，当波形到达蜂鸣器时播放
+                # 为每个采样点选择一个“当前音符”：
+                # 规则：在该时间范围内所有覆盖此时刻的音符中，
+                # 1) 优先选择 start_time 最大（靠后开始的），
+                # 2) 如果 start_time 相同，则选择 pitch 较高的。
+                eps = 1e-4
+                for i in range(num_samples):
+                    sample_time = visible_start_time + i * time_step
+                    winner = None
+                    for note in all_notes:
+                        note_start = note.start_time
+                        note_end = note.start_time + note.duration
+                        if note_start <= sample_time < note_end:
+                            if winner is None:
+                                winner = note
+                            else:
+                                if (note_start > winner.start_time + eps or
+                                    (abs(note_start - winner.start_time) <= eps and note.pitch > winner.pitch)):
+                                    winner = note
+                    if winner is None:
+                        continue
+                    full_waveform = note_waveforms.get(id(winner))
+                    if full_waveform is None or len(full_waveform) == 0:
+                        continue
+                    note_duration = winner.duration
+                    if note_duration <= 0:
+                        continue
+                    local_pos = (sample_time - winner.start_time) / note_duration
+                    local_pos = max(0.0, min(1.0, local_pos))
+                    wf_idx = local_pos * (len(full_waveform) - 1)
+                    left = int(np.floor(wf_idx))
+                    right = min(len(full_waveform) - 1, left + 1)
+                    frac = wf_idx - left
+                    value = (1.0 - frac) * full_waveform[left] + frac * full_waveform[right]
+                    continuous_waveform[i] = value
+                
+                # 可选：按当前窗口内的最大幅度归一化，使波形尽量“撑满”通道高度
+                max_amp = np.max(np.abs(continuous_waveform))
+                if max_amp > 0:
+                    continuous_waveform = continuous_waveform / max_amp
+                
+                # 现在计算每个采样点在屏幕上的x位置
+                # 将整个可见时间窗口线性映射到完整的波形区域宽度：
+                # - 最左边对应 visible_start_time（过去）
+                # - 最右边（蜂鸣器位置）对应 visible_end_time == current_time
                 points = []
                 for i in range(num_samples):
-                    # 计算这个采样点对应的时间（使用固定的time_step）
-                    sample_time = visible_start_time + i * time_step
-                    
-                    # 计算这个时间点在屏幕上的x位置
-                    time_offset = sample_time - animation_time
-                    x = waveform_area_width - time_offset * self.waveform_speed
-                    
-                    # 只绘制在可见区域内的点（稍微放宽边界，确保连续）
-                    if -10 <= x <= waveform_area_width + 10:
-                        screen_x = waveform_start_x + x
-                        screen_y = channel_center_y - continuous_waveform[i] * self.channel_height * 0.4
-                        points.append((screen_x, screen_y))
+                    # 线性插值到 [0, waveform_area_width]（时间从左到右推进）
+                    if num_samples > 1:
+                        x_norm = i / (num_samples - 1)
+                    else:
+                        x_norm = 0.0
+                    x = x_norm * waveform_area_width
+                    screen_x = waveform_start_x + x
+                    # 使用接近整个通道高度的比例，使波形更“饱满”
+                    screen_y = channel_center_y - continuous_waveform[i] * self.channel_height * 0.45
+                    points.append((screen_x, screen_y))
                 
                 # 绘制连续波形线
                 if len(points) > 1:
