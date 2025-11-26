@@ -18,12 +18,13 @@ import os
 from core.sequencer import Sequencer
 from core.models import Project, WaveformType, Track, Note, TrackType
 from core.midi_io import MidiIO
-from core.track_events import DrumType
+from core.track_events import DrumType, DrumEvent
 
 from ui.unified_editor_widget import UnifiedEditorWidget
 from ui.grid_sequence_widget import GridSequenceWidget
 from ui.timeline_widget import TimelineWidget
 from ui.property_panel_widget import PropertyPanelWidget
+from ui.score_library_widget import ScoreLibraryWidget
 from ui.metronome_widget import MetronomeWidget
 from ui.oscilloscope_widget import OscilloscopeWidget
 from ui.theme import theme_manager
@@ -31,6 +32,7 @@ from ui.shortcut_manager import get_shortcut_manager
 from ui.shortcut_config_dialog import ShortcutConfigDialog
 from PyQt5.QtWidgets import QStackedWidget, QTabWidget, QPushButton, QButtonGroup, QSpinBox
 from ui.settings_manager import get_settings_manager
+from core.score_library import ScoreLibrary
 
 
 class MainWindow(QMainWindow):
@@ -51,6 +53,8 @@ class MainWindow(QMainWindow):
         self.shortcut_manager = get_shortcut_manager()
         # 设置管理器
         self.settings_manager = get_settings_manager()
+        # 乐谱片段库
+        self.score_library = ScoreLibrary()
         
         self.init_ui()
         self.setup_menu()
@@ -235,16 +239,35 @@ class MainWindow(QMainWindow):
         
         main_layout.addWidget(track_area, 1)  # 拉伸因子1，占一半
         
-        # ========== 属性面板：使用浮动窗口（DockWidget）==========
+        # ========== 属性 / 乐谱面板：使用浮动窗口（DockWidget）==========
         self.property_dock = QDockWidget("属性面板", self)
         self.property_panel = PropertyPanelWidget()
         self.property_dock.setWidget(self.property_panel)
         self.property_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
         self.addDockWidget(Qt.RightDockWidgetArea, self.property_dock)
-        # 默认不显示，需要时通过菜单显示
-        self.property_dock.setVisible(False)
+        # 为了避免属性面板从“空状态”到“有控件”时宽度猛然变化，固定一个较为合适的最小宽度，
+        # 并默认显示一个空状态文本，这样音轨区域的宽度在使用过程中保持稳定，不会因为选中/取消选中而抖动。
+        from PyQt5.QtWidgets import QSizePolicy
+        self.property_dock.setMinimumWidth(320)
+        # 允许用户手动调整到更宽，但不要因为内容变化自动变窄
+        self.property_dock.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        # 默认显示（显示的是“未选中音符”的空状态），避免第一次选中音符时界面突然被挤压
+        self.property_dock.setVisible(True)
         # 允许关闭，但可以通过菜单重新打开
         self.property_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable | QDockWidget.DockWidgetClosable)
+
+        # 乐谱面板（乐谱片段库）
+        self.score_dock = QDockWidget("乐谱面板", self)
+        self.score_panel = ScoreLibraryWidget(self.score_library)
+        self.score_dock.setWidget(self.score_panel)
+        self.score_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.score_dock)
+        # 默认不显示，需要时通过菜单显示
+        self.score_dock.setVisible(False)
+        self.score_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable | QDockWidget.DockWidgetClosable)
+
+        # 将两个面板在右侧堆叠（类似 Altium 的属性面板/其它面板堆叠效果）
+        self.tabifyDockWidget(self.property_dock, self.score_dock)
         
         # 连接信号
         self.connect_signals()
@@ -452,6 +475,12 @@ class MainWindow(QMainWindow):
         self.property_panel.property_update_requested.connect(self.on_property_update_requested)
         self.property_panel.batch_property_changed.connect(self.on_batch_property_changed)
         self.property_panel.track_property_changed.connect(self.on_track_property_changed)
+
+        # 乐谱面板信号
+        if hasattr(self, "score_panel"):
+            self.score_panel.request_create_from_selection.connect(self.on_score_create_from_selection)
+            self.score_panel.snippet_apply_requested.connect(self.on_score_apply_snippet)
+            self.score_panel.snippet_delete_requested.connect(self.on_score_delete_snippet)
         
         # 序列编辑器选择变化信号
         self.sequence_widget.selection_changed.connect(self.on_selection_changed)
@@ -729,10 +758,24 @@ class MainWindow(QMainWindow):
         # 更新属性面板
         self.property_panel.set_note(note, track)
         
-        note_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-        octave = note.pitch // 12 - 1
-        note_name = note_names[note.pitch % 12]
-        self.statusBar().showMessage(f"已选中音符: {note_name}{octave} (按Delete键删除)")
+        # 根据对象类型更新状态栏信息
+        if isinstance(note, DrumEvent):
+            drum_names = {
+                DrumType.KICK: "底鼓",
+                DrumType.SNARE: "军鼓",
+                DrumType.HIHAT: "踩镲",
+                DrumType.CRASH: "吊镲",
+            }
+            self.statusBar().showMessage(
+                f"已选中打击乐: {drum_names.get(note.drum_type, '打击')} (按Delete键删除)"
+            )
+        else:
+            note_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+            octave = note.pitch // 12 - 1
+            note_name = note_names[note.pitch % 12]
+            self.statusBar().showMessage(f"已选中音符: {note_name}{octave} (按Delete键删除)")
+        # 自动聚焦属性面板（如果当前显示的是乐谱面板，则切换回属性面板）
+        self._focus_property_panel()
     
     def on_note_deleted(self, note, track):
         """音符被删除（单个，通过命令系统）"""
@@ -917,6 +960,8 @@ class MainWindow(QMainWindow):
             # 多选，显示批量编辑
             notes_and_tracks = [(block.item, block.track) for block in selected_blocks]
             self.property_panel.set_notes(notes_and_tracks)
+            # 多选时同样自动聚焦属性面板，方便立即批量调整
+            self._focus_property_panel()
     
     def on_batch_property_changed(self, notes_and_tracks: list):
         """批量属性改变"""
@@ -926,8 +971,8 @@ class MainWindow(QMainWindow):
         # 获取要修改的属性
         kwargs = {}
         
-        # 波形（从批量编辑获取）
-        if hasattr(self.property_panel, 'batch_waveform_combo'):
+        # 波形（仅当用户在批量区域实际修改了波形时才应用）
+        if hasattr(self.property_panel, 'batch_waveform_combo') and getattr(self.property_panel, "_batch_waveform_dirty", False):
             waveform_map = {
                 0: WaveformType.SQUARE,
                 1: WaveformType.TRIANGLE,
@@ -939,13 +984,13 @@ class MainWindow(QMainWindow):
             if selected_waveform:
                 kwargs['waveform'] = selected_waveform
         
-        # 力度
-        if hasattr(self.property_panel, 'batch_velocity_slider'):
+        # 力度（仅当用户在批量区域实际拖动过力度滑块时才应用）
+        if hasattr(self.property_panel, 'batch_velocity_slider') and getattr(self.property_panel, "_batch_velocity_dirty", False):
             velocity = self.property_panel.batch_velocity_slider.value()
             kwargs['velocity'] = velocity
         
-        # 占空比
-        if hasattr(self.property_panel, 'batch_duty_spinbox'):
+        # 占空比（仅当用户在批量区域实际修改过占空比时才应用）
+        if hasattr(self.property_panel, 'batch_duty_spinbox') and getattr(self.property_panel, "_batch_duty_dirty", False):
             duty_cycle = self.property_panel.batch_duty_spinbox.value()
             kwargs['duty_cycle'] = duty_cycle
         
@@ -954,6 +999,22 @@ class MainWindow(QMainWindow):
             self.sequencer.batch_modify_notes(notes_and_tracks, **kwargs)
             # 刷新显示（批量修改需要刷新以反映变化）
             self.refresh_ui(preserve_selection=True)
+
+            # 由于刷新过程中会重建部分 UI，原先的多选高亮可能丢失，
+            # 这里根据 notes_and_tracks 重新恢复选中状态，保持用户的多选不变。
+            try:
+                selected_blocks = []
+                for note, track in notes_and_tracks:
+                    block = self.sequence_widget.note_blocks.get((id(note), id(track)))
+                    if block:
+                        block.setSelected(True)
+                        selected_blocks.append(block)
+                # 同步更新 GridSequenceWidget 内部的 selected_items 状态
+                if selected_blocks and hasattr(self.sequence_widget, "_update_selection_from_blocks"):
+                    self.sequence_widget._update_selection_from_blocks(selected_blocks)
+            except Exception:
+                pass
+
             self.statusBar().showMessage(f"已批量修改 {len(notes_and_tracks)} 个音符的属性")
     
     def on_track_clicked(self, track: Track):
@@ -970,9 +1031,9 @@ class MainWindow(QMainWindow):
         # 高亮显示目标音轨
         self.sequence_widget.set_highlighted_track(track)
         
-        # 确保属性面板保持音轨编辑模式（防止on_selection_changed覆盖）
-        # 注意：set_track已经在上面调用了，这里再次调用以确保显示正确
+        # 确保属性面板保持音轨编辑模式（防止on_selection_changed覆盖），并切换到属性面板标签
         self.property_panel.set_track(track)
+        self._focus_property_panel()
         
         note_count = len(track.notes) if track.track_type == TrackType.NOTE_TRACK else len(track.drum_events)
         self.statusBar().showMessage(f"已选中音轨: {track.name} ({note_count} 个音符/事件)")
@@ -1159,6 +1220,13 @@ class MainWindow(QMainWindow):
         self.toggle_property_action.setChecked(False)  # 默认不显示
         self.toggle_property_action.triggered.connect(self.toggle_property_panel)
         view_menu.addAction(self.toggle_property_action)
+
+        # 显示/隐藏乐谱面板
+        self.toggle_score_action = QAction("乐谱面板(&L)", self)
+        self.toggle_score_action.setCheckable(True)
+        self.toggle_score_action.setChecked(False)
+        self.toggle_score_action.triggered.connect(self.toggle_score_panel)
+        view_menu.addAction(self.toggle_score_action)
         
         # 编辑菜单
         edit_menu = menubar.addMenu("编辑(&E)")
@@ -2084,6 +2152,237 @@ class MainWindow(QMainWindow):
     def toggle_property_panel(self, visible: bool):
         """切换属性面板的显示/隐藏"""
         self.property_dock.setVisible(visible)
+        # 确保乐谱面板状态按钮与实际一致（互斥显示更符合直觉）
+        if visible and hasattr(self, "toggle_score_action"):
+            self.toggle_score_action.setChecked(self.score_dock.isVisible())
+
+    def _focus_property_panel(self):
+        """确保属性面板可见并置于属性/乐谱堆叠的最前面"""
+        if not hasattr(self, "property_dock"):
+            return
+        self.property_dock.setVisible(True)
+        if hasattr(self, "toggle_property_action"):
+            self.toggle_property_action.setChecked(True)
+        try:
+            # 如果属性面板与乐谱面板堆叠在一起，这里确保切换到“属性面板”这一页
+            self.property_dock.raise_()
+        except Exception:
+            pass
+
+    def toggle_score_panel(self, visible: bool):
+        """切换乐谱面板的显示/隐藏"""
+        if not hasattr(self, "score_dock"):
+            return
+        self.score_dock.setVisible(visible)
+        # 可根据需要选择互斥：这里不强制关闭属性面板，只是跟随更新菜单状态
+        if hasattr(self, "toggle_property_action"):
+            self.toggle_property_action.setChecked(self.property_dock.isVisible())
+
+    # ---- 乐谱面板相关逻辑 ----
+
+    def on_score_create_from_selection(self):
+        """从当前选中的音符/鼓点创建乐谱片段"""
+        if not hasattr(self.sequence_widget, "selected_items"):
+            return
+
+        selected = list(self.sequence_widget.selected_items)
+        if not selected:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.information(self, "提示", "请先在音轨区域选择一个或多个音符/鼓点。")
+            return
+
+        # 要求所有选中的项在同一个音轨上
+        first_track = selected[0][1]
+        from core.track_events import DrumEvent
+        is_drum_track = first_track.track_type == TrackType.DRUM_TRACK
+        for item, track in selected:
+            if track is not first_track:
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "提示", "当前仅支持从单个音轨的选择创建片段，请不要跨多个音轨选择。")
+                return
+            # 简单校验类型一致
+            if is_drum_track and not isinstance(item, DrumEvent):
+                QMessageBox.warning(self, "提示", "鼓点乐谱片段仅支持来自打击乐音轨的事件。")
+                return
+
+        # 计算相对时间/节拍，起点归一到 0
+        if is_drum_track:
+            # 使用节拍
+            all_beats = [ev.start_beat for ev, _t in selected]
+            base_beat = min(all_beats)
+            drums = []
+            for ev, _t in selected:
+                drums.append(
+                    {
+                        "offset_beats": ev.start_beat - base_beat,
+                        "duration_beats": ev.duration_beats,
+                        "drum_type": ev.drum_type.name,
+                        "velocity": getattr(ev, "velocity", 100),
+                    }
+                )
+            snippet_type = "drum"
+            data = {"drums": drums}
+        else:
+            # 普通音符使用秒
+            all_times = [n.start_time for n, _t in selected]
+            base_time = min(all_times)
+            notes = []
+            for n, _t in selected:
+                notes.append(
+                    {
+                        "offset": n.start_time - base_time,
+                        "duration": n.duration,
+                        "pitch": n.pitch,
+                        "velocity": getattr(n, "velocity", 100),
+                        "waveform": getattr(getattr(n, "waveform", None), "name", ""),
+                        "duty_cycle": getattr(n, "duty_cycle", 0.5),
+                    }
+                )
+            snippet_type = "note"
+            data = {"notes": notes}
+
+        # 让用户输入名称和分组
+        from PyQt5.QtWidgets import QInputDialog
+
+        name, ok = QInputDialog.getText(self, "乐谱片段名称", "请输入片段名称：")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+
+        group, ok = QInputDialog.getText(self, "乐谱片段分组", "可选：输入分组名称（例如：常用鼓点 / 和弦进行）：")
+        if not ok:
+            group = ""
+        group = group.strip()
+
+        # 添加到库
+        snippet_id = self.score_library.add_snippet(
+            name=name,
+            group=group,
+            snippet_type=snippet_type,
+            track_name=first_track.name,
+            data=data,
+        )
+
+        # 刷新 UI
+        if hasattr(self, "score_panel"):
+            self.score_panel.refresh()
+
+        self.statusBar().showMessage(f"已保存乐谱片段：{name}（{snippet_id[:8]}）")
+
+    def on_score_apply_snippet(self, snippet_id: str):
+        """在当前选中音轨应用指定乐谱片段"""
+        snippet = self.score_library.get_snippet(snippet_id)
+        if not snippet:
+            return
+
+        snippet_type = snippet.get("type")
+        data = snippet.get("data") or {}
+
+        # 选择目标音轨：优先使用当前选中/高亮的音轨
+        target_track = self._get_selected_track()
+        if target_track is None:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.information(self, "提示", "请先在音轨区域选择一个目标音轨。")
+            return
+
+        if snippet_type == "drum" and target_track.track_type != TrackType.DRUM_TRACK:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "提示", "鼓点乐谱片段只能应用到打击乐音轨。")
+            return
+        if snippet_type == "note" and target_track.track_type != TrackType.NOTE_TRACK:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "提示", "音符乐谱片段只能应用到音符音轨（主旋律/低音等）。")
+            return
+
+        # 读取统一编辑器当前的插入模式和波形设置
+        insert_mode = getattr(self.unified_editor, "insert_mode", "playhead")
+        selected_waveform = getattr(self.unified_editor, "selected_waveform", None)
+
+        # 计算插入起点（顺序插入 / 播放线插入）
+        bpm = self.sequencer.get_bpm()
+        if insert_mode == "sequential":
+            # 顺序插入：从当前音轨末尾开始
+            if snippet_type == "drum":
+                if target_track.drum_events:
+                    last_end_beat = max(ev.end_beat for ev in target_track.drum_events)
+                else:
+                    last_end_beat = 0.0
+                base_beat = last_end_beat
+                base_time = base_beat * 60.0 / bpm
+            else:
+                if target_track.notes:
+                    last_end_time = max(n.end_time for n in target_track.notes)
+                else:
+                    last_end_time = 0.0
+                base_time = last_end_time
+                base_beat = base_time * bpm / 60.0
+        else:
+            # 播放线插入：使用当前播放线位置
+            base_time = float(self.sequence_widget.playhead_time)
+            base_beat = base_time * bpm / 60.0
+
+        from core.track_events import DrumType
+        from core.models import WaveformType
+
+        if snippet_type == "drum":
+            drums = data.get("drums") or []
+            for info in drums:
+                offset_beats = float(info.get("offset_beats", 0.0))
+                duration_beats = float(info.get("duration_beats", 1.0))
+                drum_name = info.get("drum_type", "KICK")
+                try:
+                    drum_type = getattr(DrumType, drum_name)
+                except AttributeError:
+                    drum_type = DrumType.KICK
+                velocity = int(info.get("velocity", 100))
+                start_beat = base_beat + offset_beats
+                self.sequencer.add_drum_event(
+                    target_track,
+                    drum_type,
+                    start_beat,
+                    duration_beats,
+                    velocity=velocity,
+                )
+        else:
+            notes = data.get("notes") or []
+            for info in notes:
+                offset = float(info.get("offset", 0.0))
+                duration = float(info.get("duration", 0.25))
+                pitch = int(info.get("pitch", 60))
+                velocity = int(info.get("velocity", 100))
+                # 波形优先采用统一编辑器右侧当前选择，其次退回片段中保存的波形信息
+                waveform_name = info.get("waveform", "") or "SQUARE"
+                duty_cycle = float(info.get("duty_cycle", 0.5))
+
+                start_time = base_time + offset
+                note = self.sequencer.add_note(
+                    target_track,
+                    pitch,
+                    start_time,
+                    duration,
+                    velocity=velocity,
+                )
+                # 恢复/覆盖波形：优先使用统一编辑器当前选择的波形
+                try:
+                    if selected_waveform is not None:
+                        note.waveform = selected_waveform
+                    else:
+                        note.waveform = getattr(WaveformType, waveform_name)
+                except AttributeError:
+                    pass
+                if hasattr(note, "duty_cycle"):
+                    note.duty_cycle = duty_cycle
+
+        # 应用后刷新 UI
+        self.refresh_ui(preserve_selection=False)
+        self.statusBar().showMessage(f"已将乐谱片段“{snippet.get('name', '')}”应用到音轨：{target_track.name}")
+
+    def on_score_delete_snippet(self, snippet_id: str):
+        """删除指定乐谱片段"""
+        self.score_library.delete_snippet(snippet_id)
+        if hasattr(self, "score_panel"):
+            self.score_panel.refresh()
+        self.statusBar().showMessage("已删除乐谱片段")
     
     def undo(self):
         """撤销操作"""

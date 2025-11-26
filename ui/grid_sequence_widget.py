@@ -150,6 +150,9 @@ class SequenceBlock(QGraphicsItem):
         self.signals = SequenceBlockSignals()  # 创建信号对象
         self.original_y = track_y  # 保存原始Y坐标，用于限制拖动
         self.parent_widget = parent_widget  # 保存父widget引用，用于重叠检测
+
+        # 记录在同一时间位置上的“堆叠层级”（用于蜘蛛纸牌式垂直错位显示）
+        self.stack_index: int = 0
         
         # 波形颜色映射（可从设置管理器中配置）
         from core.models import WaveformType
@@ -308,11 +311,25 @@ class SequenceBlock(QGraphicsItem):
                     # 播放中，禁止所有交互（点击、拖动、选择）
                     event.ignore()
                     return
-        
+
         if event.button() == Qt.LeftButton:
+            # 第一次点击：仅用于选中，不允许立即拖动，防止误触
+            if not self.isSelected():
+                self.is_dragging = False
+                self.drag_start_pos = None
+                # 手动设置选中状态，避免调用基类导致拖动启动
+                self.setSelected(True)
+                self.signals.clicked.emit(self.item)
+                event.accept()
+                return
+
+            # 已经选中的情况下，第二次点击按住才允许拖动
             self.is_dragging = True
             self.drag_start_pos = self.pos()  # 记录拖动开始位置
             self.signals.clicked.emit(self.item)
+            super().mousePressEvent(event)
+            return
+
         super().mousePressEvent(event)
     
     def mouseReleaseEvent(self, event):
@@ -328,7 +345,7 @@ class SequenceBlock(QGraphicsItem):
             if x_offset >= 0:
                 # 转换为节拍
                 beats = x_offset / self.pixels_per_beat
-                
+
                 # 根据设置决定是否吸附对齐
                 from ui.settings_manager import get_settings_manager
                 settings_manager = get_settings_manager()
@@ -340,12 +357,14 @@ class SequenceBlock(QGraphicsItem):
                     snapped_beats = beats
                 # 确保不小于0
                 snapped_beats = max(0, snapped_beats)
-                
+
                 # 根据对象类型处理
                 if isinstance(self.item, DrumEvent):
-                    # DrumEvent 使用节拍
+                    # --------------------
+                    # DrumEvent：使用节拍
+                    # --------------------
                     new_start_beat = snapped_beats
-                    
+
                     # 检查重叠和交换位置（使用节拍）
                     if self.parent_widget and hasattr(self.parent_widget, 'check_and_resolve_drum_overlap'):
                         resolved_beat = self.parent_widget.check_and_resolve_drum_overlap(
@@ -354,10 +373,10 @@ class SequenceBlock(QGraphicsItem):
                         if resolved_beat is not None:
                             new_start_beat = resolved_beat
                             snapped_beats = new_start_beat
-                    
+
                     # 转换回像素位置（从0开始，因为左侧固定区域已经处理了标签和勾选框）
                     snapped_x = snapped_beats * self.pixels_per_beat
-                    
+
                     # 设置吸附后的位置
                     parent = self.parentItem()
                     if isinstance(parent, TrackGroup):
@@ -366,7 +385,7 @@ class SequenceBlock(QGraphicsItem):
                     else:
                         # 不在TrackGroup中，使用绝对坐标
                         self.setPos(snapped_x, self.original_y)
-                    
+
                     # 更新事件的start_beat
                     if new_start_beat >= 0 and abs(self.item.start_beat - new_start_beat) > 0.001:
                         old_start_beat = self.item.start_beat
@@ -376,34 +395,34 @@ class SequenceBlock(QGraphicsItem):
                             self.item, old_start_beat * 60.0 / self.bpm, new_start_beat * 60.0 / self.bpm
                         ))
                 else:
-                    # Note 使用时间
+                    # --------------------
+                    # 普通音符：使用时间
+                    # --------------------
                     new_start_time = snapped_beats * 60.0 / self.bpm
-                
-                # 根据设置决定是否检查重叠
-                from ui.settings_manager import get_settings_manager
-                settings_manager = get_settings_manager()
-                if not settings_manager.is_overlap_allowed() and self.parent_widget and hasattr(self.parent_widget, 'check_and_resolve_overlap'):
-                    # 让父widget处理重叠检测和位置交换
-                    resolved_time = self.parent_widget.check_and_resolve_overlap(
-                        self.item, self.track, new_start_time, self
-                    )
-                    if resolved_time is not None:
-                        new_start_time = resolved_time
-                        # 重新计算吸附位置
-                        snapped_beats = new_start_time * self.bpm / 60.0
-                
-                # 转换回像素位置（从0开始，因为左侧固定区域已经处理了标签和勾选框）
-                snapped_x = snapped_beats * self.pixels_per_beat
-                
+
+                    # 根据设置决定是否检查重叠
+                    if not settings_manager.is_overlap_allowed() and self.parent_widget and hasattr(self.parent_widget, 'check_and_resolve_overlap'):
+                        # 让父widget处理重叠检测和位置交换
+                        resolved_time = self.parent_widget.check_and_resolve_overlap(
+                            self.item, self.track, new_start_time, self
+                        )
+                        if resolved_time is not None:
+                            new_start_time = resolved_time
+                            # 重新计算吸附位置
+                            snapped_beats = new_start_time * self.bpm / 60.0
+
+                    # 转换回像素位置（从0开始，因为左侧固定区域已经处理了标签和勾选框）
+                    snapped_x = snapped_beats * self.pixels_per_beat
+
                     # 设置吸附后的位置（重构：音符块不在TrackGroup中，使用绝对坐标）
-                self.setPos(snapped_x, self.original_y)
-                
-                # 更新音符的start_time（确保不小于0且与原来的值不同）
-                if new_start_time >= 0 and abs(self.item.start_time - new_start_time) > 0.001:
-                    old_start_time = self.item.start_time
-                    self.item.start_time = new_start_time
-                    # 延迟发送位置改变信号，传递旧位置和新位置
-                    QTimer.singleShot(0, lambda: self.signals.position_changed.emit(self.item, old_start_time, new_start_time))
+                    self.setPos(snapped_x, self.original_y)
+
+                    # 更新音符的start_time（确保不小于0且与原来的值不同）
+                    if new_start_time >= 0 and abs(self.item.start_time - new_start_time) > 0.001:
+                        old_start_time = self.item.start_time
+                        self.item.start_time = new_start_time
+                        # 延迟发送位置改变信号，传递旧位置和新位置
+                        QTimer.singleShot(0, lambda: self.signals.position_changed.emit(self.item, old_start_time, new_start_time))
             
             self.drag_start_pos = None
         
@@ -548,7 +567,9 @@ class GridSequenceWidget(QWidget):
         # 左侧固定区域：音轨名称和勾选框
         self.track_list_widget = QWidget()
         self.track_list_layout = QVBoxLayout()
-        self.track_list_layout.setContentsMargins(5, 5, 5, 5)
+        # 为了让左侧列表与右侧轨道在垂直方向上严格对齐，
+        # 这里的顶部边距与右侧轨道的顶部偏移（20 像素左右）保持一致。
+        self.track_list_layout.setContentsMargins(0, 20, 0, 5)
         self.track_list_layout.setSpacing(0)
         self.track_list_widget.setLayout(self.track_list_layout)
         self.track_list_widget.setFixedWidth(150)  # 固定宽度150px
@@ -563,7 +584,8 @@ class GridSequenceWidget(QWidget):
         self.track_list_scroll = QScrollArea()
         self.track_list_scroll.setWidgetResizable(True)
         self.track_list_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # 禁用横向滚动
-        self.track_list_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # 隐藏滚动条，使用右侧视图的滚动条
+        # 允许垂直滚动条按需出现，既方便单独滚动左侧列表，也便于与右侧严格同步
+        self.track_list_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.track_list_scroll.setFixedWidth(150)  # 固定宽度150px
         self.track_list_scroll.setWidget(self.track_list_widget)
         
@@ -591,6 +613,8 @@ class GridSequenceWidget(QWidget):
         # 连接滚动事件，实现轨道名称冻结（始终显示在左边）
         self.view.horizontalScrollBar().valueChanged.connect(self.on_horizontal_scroll)
         self.view.verticalScrollBar().valueChanged.connect(self.on_vertical_scroll)
+        # 左侧列表滚动时，同步右侧视图
+        self.track_list_scroll.verticalScrollBar().valueChanged.connect(self.on_left_track_list_scrolled)
         
         # 重写鼠标事件以支持播放线拖动
         self.view.mousePressEvent = self.on_view_mouse_press
@@ -642,6 +666,9 @@ class GridSequenceWidget(QWidget):
         # 存储所有SequenceBlock的引用，用于重叠检测
         # 使用id()作为键，因为Note对象不可哈希
         self.note_blocks = {}  # {(id(note), id(track)): SequenceBlock}
+
+        # 滚动同步标志，避免左右滚动条互相触发造成循环
+        self._is_syncing_scroll = False
     
     def on_key_press(self, event):
         """键盘按下事件"""
@@ -728,17 +755,38 @@ class GridSequenceWidget(QWidget):
         self.selection_changed.emit()
     
     def on_selection_changed(self):
-        """选择变化时更新选中列表"""
-        selected_blocks = [item for item in self.scene.selectedItems() if isinstance(item, SequenceBlock)]
+        """选择变化时更新选中列表
+
+        注意：在窗口关闭 / 场景销毁过程中，Qt 可能会在 QGraphicsScene
+        已经被销毁后仍然触发 selectionChanged 信号，此时直接访问
+        self.scene.selectedItems() 会抛出
+        'wrapped C/C++ object of type QGraphicsScene has been deleted'。
+
+        为了避免在退出或刷新时刷屏，这里增加防御性判断和异常捕获。
+        """
+        try:
+            # 场景尚未创建或已被清理
+            if not hasattr(self, "scene") or self.scene is None:
+                return
+
+            # 访问 selectedItems 时如果底层 C++ 对象已被删除，会抛 RuntimeError
+            selected_blocks = [
+                item for item in self.scene.selectedItems()
+                if isinstance(item, SequenceBlock)
+            ]
+        except RuntimeError:
+            # 场景已销毁（例如窗口正在关闭），忽略这次回调
+            return
+
         self.selected_items = [(block.item, block.track) for block in selected_blocks]
-        
+
         # 更新单个选中项（用于兼容原有代码）
         if self.selected_items:
             self.selected_item, self.selected_track = self.selected_items[0]
         else:
             self.selected_item = None
             self.selected_track = None
-        
+
         # 发送选择变化信号（用于更新属性面板）
         if hasattr(self, 'selection_changed'):
             self.selection_changed.emit()
@@ -1272,14 +1320,14 @@ class GridSequenceWidget(QWidget):
         # 更新左侧音轨列表
         self._update_track_list()
         
-        # 第三步：为每个轨道重新创建所有音符块（确保正确分配）
+        # 第三步：为每个轨道重新创建所有音符块（确保正确分配）并应用堆叠布局
         for i, track in enumerate(self.tracks):
             y = i * track_spacing + 20
-            
+
             # 确保TrackGroup存在
             if i < len(self.track_groups):
                 track_group = self.track_groups[i]
-                
+
                 # 为该轨道创建所有音符块
                 if track.track_type == TrackType.DRUM_TRACK:
                     sorted_events = sorted(track.drum_events, key=lambda e: e.start_beat)
@@ -1292,6 +1340,9 @@ class GridSequenceWidget(QWidget):
                         block_key = (id(note), id(track))
                         track_type = self.get_track_type(track)
                         self._update_or_create_block(block_key, note, track, i, y, track_type)
+
+                # 为当前轨道应用蜘蛛纸牌式堆叠布局（仅影响显示，不改变音符时间）
+                self._apply_stack_layout_for_track(track, i)
     
     def _update_track_list(self):
         """更新左侧音轨列表（勾选框和名称）"""
@@ -1312,6 +1363,7 @@ class GridSequenceWidget(QWidget):
         
         # 为每个音轨创建项
         theme = theme_manager.current_theme
+        from PyQt5.QtWidgets import QFrame
         for i, track in enumerate(self.tracks):
             # 创建音轨项容器
             track_item_widget = QWidget()
@@ -1349,6 +1401,14 @@ class GridSequenceWidget(QWidget):
             
             # 添加到布局
             self.track_list_layout.addWidget(track_item_widget)
+
+            # 在相邻音轨之间添加一条分隔线，便于区分
+            if i < len(self.tracks) - 1:
+                line = QFrame()
+                line.setFrameShape(QFrame.HLine)
+                line.setFrameShadow(QFrame.Sunken)
+                line.setStyleSheet("color: #CCCCCC;")
+                self.track_list_layout.addWidget(line)
             
             # 保存引用
             self.track_list_items.append((checkbox, label, track))
@@ -1391,6 +1451,9 @@ class GridSequenceWidget(QWidget):
         """更新或创建块"""
         from core.track_events import DrumEvent
         from core.models import WaveformType
+        from ui.settings_manager import get_settings_manager
+
+        settings_manager = get_settings_manager()
         
         if block_key in self.note_blocks:
             # 更新现有块
@@ -1429,27 +1492,43 @@ class GridSequenceWidget(QWidget):
                     start_beats = item.start_beat
                 else:  # Note
                     start_beats = item.start_time * self.bpm / 60.0
-                
+
                 # 根据设置决定是否对齐
-                from ui.settings_manager import get_settings_manager
-                settings_manager = get_settings_manager()
                 if settings_manager.is_snap_to_beat_enabled():
                     start_beats = round(start_beats * 4) / 4
                 # 确保start_beats不小于0
                 start_beats = max(0, start_beats)
-                
+
                 # 关键修复：计算绝对x坐标（从0开始，因为左侧固定区域已经单独处理）
                 x = start_beats * self.pixels_per_beat
-                
-                # 重构：音符块直接使用绝对坐标，不添加到TrackGroup
-                # 计算Y坐标：轨道中间位置
+
+                # 计算基础Y坐标：轨道中间位置
                 track_y = track_index * 60 + 20  # 轨道顶部Y坐标
-                note_y = track_y + 10  # 轨道中间位置（轨道高度60，音符高度40，居中）
-                
-                # 确保x坐标不小于0（第 0 拍）
+                base_note_y = track_y + 10  # 轨道中间位置（轨道高度60，音符高度40，居中）
+
+                # 根据设置决定是否启用“蜘蛛纸牌式”堆叠显示
                 absolute_x = max(0, x)
+                note_y = base_note_y
+                block.stack_index = 0
+                if settings_manager.is_stack_overlapped_notes_enabled():
+                    # 计算在同一位置已经存在的块数量，用作堆叠层级
+                    stack_step = 6  # 每一层向下偏移的像素
+                    tolerance_px = max(2.0, self.pixels_per_beat * 0.1)  # 容许的X误差
+                    same_position_blocks = [
+                        b for b in self.note_blocks.values()
+                        if b is not block and b.track is track and abs(b.pos().x() - absolute_x) <= tolerance_px
+                    ]
+                    if same_position_blocks:
+                        # 按当前已有的stack_index排序，新的在最下方
+                        max_index = max(getattr(b, "stack_index", 0) for b in same_position_blocks)
+                        block.stack_index = max_index + 1
+                        note_y = base_note_y + block.stack_index * stack_step
+                    else:
+                        block.stack_index = 0
+                        note_y = base_note_y
+
                 block.setPos(absolute_x, note_y)
-                block.original_y = note_y
+                block.original_y = base_note_y
                 
                 # 确保音符块在场景中（如果不在）
                 if not block.scene():
@@ -1484,27 +1563,41 @@ class GridSequenceWidget(QWidget):
                 start_beats = item.start_beat
             else:  # Note
                 start_beats = item.start_time * self.bpm / 60.0
-            
+
             # 根据设置决定是否对齐
-            from ui.settings_manager import get_settings_manager
-            settings_manager = get_settings_manager()
             if settings_manager.is_snap_to_beat_enabled():
                 start_beats = round(start_beats * 4) / 4
             # 确保start_beats不小于0
             start_beats = max(0, start_beats)
-            
+
             # 关键修复：计算绝对x坐标（从0开始，因为左侧固定区域已经单独处理）
             x = start_beats * self.pixels_per_beat
-                
-            # 重构：音符块直接使用绝对坐标，不添加到TrackGroup
-            # 计算Y坐标：轨道中间位置
+
+            # 计算基础Y坐标：轨道中间位置
             track_y = track_index * 60 + 20  # 轨道顶部Y坐标
-            note_y = track_y + 10  # 轨道中间位置（轨道高度60，音符高度40，居中）
-            
+            base_note_y = track_y + 10  # 轨道中间位置（轨道高度60，音符高度40，居中）
+
             # 确保x坐标不小于0（第 0 拍）
             absolute_x = max(0, x)
+            note_y = base_note_y
+            block.stack_index = 0
+            if settings_manager.is_stack_overlapped_notes_enabled():
+                stack_step = 6
+                tolerance_px = max(2.0, self.pixels_per_beat * 0.1)
+                same_position_blocks = [
+                    b for b in self.note_blocks.values()
+                    if b is not block and b.track is track and abs(b.pos().x() - absolute_x) <= tolerance_px
+                ]
+                if same_position_blocks:
+                    max_index = max(getattr(b, "stack_index", 0) for b in same_position_blocks)
+                    block.stack_index = max_index + 1
+                    note_y = base_note_y + block.stack_index * stack_step
+                else:
+                    block.stack_index = 0
+                    note_y = base_note_y
+
             block.setPos(absolute_x, note_y)
-            block.original_y = note_y
+            block.original_y = base_note_y
             
             # 直接添加到场景
             self.scene.addItem(block)
@@ -1532,6 +1625,102 @@ class GridSequenceWidget(QWidget):
                 block.signals.position_changed.connect(lambda n, old_st, new_st, t=track: self.on_note_position_changed(n, t, old_st, new_st))
             
             self.note_blocks[block_key] = block
+
+    def _apply_stack_layout_for_track(self, track: Track, track_index: int):
+        """为指定轨道应用蜘蛛纸牌式堆叠布局（仅显示层级，不改变时间）"""
+        from core.track_events import DrumEvent
+        from ui.settings_manager import get_settings_manager
+
+        settings_manager = get_settings_manager()
+        if not settings_manager.is_stack_overlapped_notes_enabled():
+            # 关闭时，所有块恢复到轨道中线
+            base_y = track_index * 60 + 20 + 10
+            for (item_id, track_id), block in self.note_blocks.items():
+                if block.track is track and not isinstance(block.item, DrumEvent):
+                    pos = block.pos()
+                    block.stack_index = 0
+                    block.setPos(pos.x(), base_y)
+            return
+
+        # 收集本轨道上的非打击乐块
+        note_entries = []
+        for (item_id, track_id), block in self.note_blocks.items():
+            if block.track is not track:
+                continue
+            if isinstance(block.item, DrumEvent):
+                continue
+            item = block.item
+            # 统一使用“拍”为时间单位
+            start_beats = item.start_time * self.bpm / 60.0
+            duration_beats = item.duration * self.bpm / 60.0
+            end_beats = start_beats + duration_beats
+            note_entries.append({
+                "block": block,
+                "start": start_beats,
+                "end": end_beats,
+                "duration": duration_beats,
+            })
+
+        if not note_entries:
+            return
+
+        # 按开始时间排序，若相同则按时长从长到短排序（便于后面把长音放在底层）
+        note_entries.sort(key=lambda e: (e["start"], -e["duration"]))
+
+        # 按时间重叠分组（同一组内任意两音有交集）
+        clusters = []
+        current_cluster = []
+        current_end = None
+        eps = 1e-4
+        for entry in note_entries:
+            if not current_cluster:
+                current_cluster = [entry]
+                current_end = entry["end"]
+            else:
+                if entry["start"] < current_end - eps:  # 有交集视为一组
+                    current_cluster.append(entry)
+                    current_end = max(current_end, entry["end"])
+                else:
+                    clusters.append(current_cluster)
+                    current_cluster = [entry]
+                    current_end = entry["end"]
+        if current_cluster:
+            clusters.append(current_cluster)
+
+        # 轨道与音符高度
+        track_height = 60.0
+        block_height = 40.0
+        track_top = track_index * 60 + 20
+        base_y = track_top + 10  # 原本的中线
+
+        for cluster in clusters:
+            n = len(cluster)
+            if n <= 1:
+                # 单个音符保持在中线
+                entry = cluster[0]
+                block = entry["block"]
+                pos = block.pos()
+                block.stack_index = 0
+                block.setPos(pos.x(), base_y)
+                continue
+
+            # 长音在底层：按 duration 从长到短排序
+            cluster_sorted = sorted(cluster, key=lambda e: -e["duration"])
+
+            # 最大可用垂直偏移，避免溢出轨道
+            max_offset = max(8.0, track_height - block_height - 4.0)
+            step = max(3.0, min(10.0, max_offset / (n - 1)))
+
+            # 0 号是最长的，放在最下层；其余依次向上
+            for idx, entry in enumerate(cluster_sorted):
+                block = entry["block"]
+                pos = block.pos()
+                stack_index = idx  # 0 = 最下层（最长），数字越大越靠上
+                block.stack_index = stack_index
+                # 最顶层贴近 base_y，底层在最下面
+                y_offset = step * (n - 1 - stack_index)
+                new_y = base_y + y_offset
+                block.setPos(pos.x(), new_y)
     
     def _create_track_ui(self, track, track_index, y):
         """创建轨道的UI元素（仅轨道线）- 标签和勾选框现在在左侧固定区域"""
@@ -1616,6 +1805,9 @@ class GridSequenceWidget(QWidget):
                     block_key = (id(note), id(track))
                     track_type = self.get_track_type(track)
                     self._update_or_create_block(block_key, note, track, i, y, track_type)
+
+            # 为当前轨道应用蜘蛛纸牌式堆叠布局
+            self._apply_stack_layout_for_track(track, i)
     
     def on_note_block_clicked(self, note, track):
         """音符块被点击"""
@@ -2127,10 +2319,45 @@ class GridSequenceWidget(QWidget):
     
     def on_vertical_scroll(self, value):
         """纵向滚动时，同步左侧音轨列表的滚动"""
-        # 同步左侧音轨列表的滚动位置
-        if hasattr(self, 'track_list_scroll'):
-            # 同步滚动条位置
-            self.track_list_scroll.verticalScrollBar().setValue(value)
+        if self._is_syncing_scroll:
+            return
+        self._is_syncing_scroll = True
+        try:
+            # 同步左侧音轨列表的滚动位置（按比例映射，保证上下行严格对齐）
+            if hasattr(self, 'track_list_scroll'):
+                view_bar = self.view.verticalScrollBar()
+                list_bar = self.track_list_scroll.verticalScrollBar()
+                if view_bar.maximum() > 0 and list_bar.maximum() > 0:
+                    ratio = value / max(1, view_bar.maximum())
+                    list_value = int(ratio * list_bar.maximum())
+                    list_bar.setValue(list_value)
+                else:
+                    # 回退：直接使用相同的值（内容较少时差异不大）
+                    list_bar.setValue(value)
+        except Exception:
+            # 防御性处理，避免异常导致滚动卡住
+            pass
+        finally:
+            self._is_syncing_scroll = False
+
+    def on_left_track_list_scrolled(self, value):
+        """左侧音轨名称列表滚动时，同步右侧音轨视图"""
+        if self._is_syncing_scroll:
+            return
+        self._is_syncing_scroll = True
+        try:
+            view_bar = self.view.verticalScrollBar()
+            list_bar = self.track_list_scroll.verticalScrollBar()
+            if list_bar.maximum() > 0 and view_bar.maximum() > 0:
+                ratio = value / max(1, list_bar.maximum())
+                view_value = int(ratio * view_bar.maximum())
+                view_bar.setValue(view_value)
+            else:
+                view_bar.setValue(value)
+        except Exception:
+            pass
+        finally:
+            self._is_syncing_scroll = False
     
     def update_playhead_from_pos(self, scene_pos):
         """根据场景坐标更新播放线位置"""

@@ -17,6 +17,7 @@ class SettingsManager(QObject):
     DEFAULT_SETTINGS = {
         "snap_to_beat": True,      # 是否吸附对齐到节拍
         "allow_overlap": False,    # 是否允许重叠
+        "stack_overlapped_notes": False,  # 是否将重叠音符以“蜘蛛纸牌”方式垂直摞起
         # 播放相关
         "playhead_refresh_interval_ms": 50,    # 播放线刷新间隔（毫秒），默认50ms≈20FPS
         # 显示与主题相关设置
@@ -113,6 +114,14 @@ class SettingsManager(QObject):
     def set_allow_overlap(self, allowed: bool):
         """设置是否允许重叠"""
         self.set("allow_overlap", allowed)
+
+    def is_stack_overlapped_notes_enabled(self) -> bool:
+        """是否启用重叠音符垂直摞起显示（蜘蛛纸牌样式）"""
+        return bool(self.get("stack_overlapped_notes", False))
+
+    def set_stack_overlapped_notes(self, enabled: bool):
+        """设置是否启用重叠音符垂直摞起显示"""
+        self.set("stack_overlapped_notes", bool(enabled))
 
     # 播放线刷新率相关
     def get_playhead_refresh_interval(self) -> int:

@@ -37,6 +37,10 @@ class PropertyPanelWidget(QWidget):
         self.current_notes: list = []  # 多选音符列表 [(note, track), ...]
         self.current_track_for_edit: Track = None  # 当前编辑的音轨
         self.bpm: float = 120.0  # 默认BPM
+        # 批量编辑控件是否被用户主动修改的标记（用于区分“未触碰”与“需要应用”）
+        self._batch_waveform_dirty: bool = False
+        self._batch_velocity_dirty: bool = False
+        self._batch_duty_dirty: bool = False
         
         self.init_ui()
         self.set_note(None, None)  # 初始化为空
@@ -567,6 +571,10 @@ class PropertyPanelWidget(QWidget):
             self.track_edit_group.setVisible(False)
             self.multi_select_label.setVisible(True)
             self.multi_select_label.setText(f"已选中 {len(notes)} 个音符\n可以统一编辑共有属性")
+            # 进入多选批量编辑时，认为所有批量控件尚未被用户触碰
+            self._batch_waveform_dirty = False
+            self._batch_velocity_dirty = False
+            self._batch_duty_dirty = False
     
     def set_track(self, track: Track):
         """
@@ -630,6 +638,10 @@ class PropertyPanelWidget(QWidget):
                 else:
                     self.track_type_combo.setCurrentIndex(0)  # 默认主旋律
             self.track_type_combo.blockSignals(False)
+            # 进入音轨批量编辑模式时，同样重置“脏标记”
+            self._batch_waveform_dirty = False
+            self._batch_velocity_dirty = False
+            self._batch_duty_dirty = False
     
     def update_ui(self):
         """更新UI显示"""
@@ -1134,6 +1146,8 @@ class PropertyPanelWidget(QWidget):
         """批量波形改变（立即生效）"""
         if not self.current_notes:
             return
+        # 标记为用户确实修改过波形，下次批量应用时才会真正修改波形
+        self._batch_waveform_dirty = True
         # 发送批量修改信号（立即生效）
         self.batch_property_changed.emit(self.current_notes)
     
@@ -1141,6 +1155,8 @@ class PropertyPanelWidget(QWidget):
         """批量力度改变（立即生效）"""
         if not self.current_notes:
             return
+        # 标记为用户确实修改过力度
+        self._batch_velocity_dirty = True
         # 发送批量修改信号（立即生效）
         self.batch_property_changed.emit(self.current_notes)
     
@@ -1148,6 +1164,8 @@ class PropertyPanelWidget(QWidget):
         """批量占空比改变（立即生效）"""
         if not self.current_notes:
             return
+        # 标记为用户确实修改过占空比
+        self._batch_duty_dirty = True
         # 发送批量修改信号（立即生效）
         self.batch_property_changed.emit(self.current_notes)
     

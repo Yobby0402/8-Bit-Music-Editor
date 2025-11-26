@@ -359,6 +359,11 @@ class SettingsDialog(QDialog):
         self.allow_overlap_checkbox.setChecked(self.settings_manager.is_overlap_allowed())
         layout.addWidget(self.allow_overlap_checkbox)
 
+        # 重叠音符的显示方式：蜘蛛纸牌式垂直摞起
+        self.stack_overlapped_checkbox = QCheckBox("重叠音符堆叠显示（类似蜘蛛纸牌，从上到下错位，而不是完全重叠）")
+        self.stack_overlapped_checkbox.setChecked(self.settings_manager.is_stack_overlapped_notes_enabled())
+        layout.addWidget(self.stack_overlapped_checkbox)
+
         # 播放线刷新率（毫秒）
         refresh_layout = QHBoxLayout()
         refresh_label = QLabel("播放线刷新间隔 (毫秒，数值越小越流畅、但更耗性能):")
@@ -375,7 +380,8 @@ class SettingsDialog(QDialog):
         info_label = QLabel(
             "说明：\n"
             " - 吸附到节拍网格：在拖动音符、移动播放线等操作时，对齐到最近的 1/4 拍位置。\n"
-            " - 允许重叠：关闭时，在网格中拖动或导入时将尽量避免音符交叠；开启则保留叠音和和弦结构。"
+            " - 允许重叠：关闭时，在网格中拖动或导入时将尽量避免音符交叠；开启则保留叠音和和弦结构。\n"
+            " - 重叠音符堆叠显示：仅影响显示方式，开启后相同位置的音符会在垂直方向上错位摞起，方便查看。"
         )
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
@@ -674,11 +680,13 @@ class SettingsDialog(QDialog):
             }
             self.settings_manager.set_background_gradient_mode(idx_to_mode.get(idx, "none"))
 
-        # 编辑行为设置（吸附/重叠/播放线刷新率）
+        # 编辑行为设置（吸附/重叠/堆叠显示/播放线刷新率）
         if hasattr(self, "snap_to_beat_checkbox"):
             self.settings_manager.set_snap_to_beat(self.snap_to_beat_checkbox.isChecked())
         if hasattr(self, "allow_overlap_checkbox"):
             self.settings_manager.set_allow_overlap(self.allow_overlap_checkbox.isChecked())
+        if hasattr(self, "stack_overlapped_checkbox"):
+            self.settings_manager.set_stack_overlapped_notes(self.stack_overlapped_checkbox.isChecked())
         if hasattr(self, "playhead_refresh_spinbox"):
             self.settings_manager.set_playhead_refresh_interval(self.playhead_refresh_spinbox.value())
         
