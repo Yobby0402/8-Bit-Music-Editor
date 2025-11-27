@@ -57,7 +57,7 @@ def main():
     
     # 设置应用程序信息
     app.setApplicationName("8bit音乐制作器")
-    app.setApplicationVersion("0.1.0")
+    app.setApplicationVersion("2.4.0")
     app.setOrganizationName("8bit Music Maker")
     
     # 创建主窗口
