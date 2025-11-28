@@ -260,11 +260,29 @@ class SequenceBlock(QGraphicsItem):
             pen = QPen(QColor(0, 0, 0), 1)
         
         painter.setPen(pen)
-        painter.setBrush(QBrush(self.color))
+        
+        # 根据力度设置透明度（如果启用）
+        brush_color = QColor(self.color)
+        from ui.settings_manager import get_settings_manager
+        sm = get_settings_manager()
+        if sm.is_velocity_opacity_enabled() and hasattr(self.item, 'velocity'):
+            # 力度范围：0-127，映射到 alpha 范围：50-255
+            # 力度越小，alpha越小（越透明）
+            velocity = getattr(self.item, 'velocity', 127)
+            # 确保velocity在有效范围内（0-127）
+            velocity = max(0, min(127, int(velocity)))
+            # 将力度 0-127 映射到 alpha 50-255
+            # 公式：alpha = 50 + (velocity / 127) * (255 - 50)
+            alpha = int(50 + (velocity / 127.0) * 205)
+            # 确保alpha在有效范围内（0-255）
+            alpha = max(0, min(255, alpha))
+            brush_color.setAlpha(alpha)
+        
+        painter.setBrush(QBrush(brush_color))
         painter.drawRoundedRect(rect, 3, 3)
         
-        # 绘制标签
-        painter.setPen(QPen(QColor(255, 255, 255)))
+        # 绘制标签（标签始终使用黑色，不随透明度变化，确保清晰可见）
+        painter.setPen(QPen(QColor(0, 0, 0)))  # 黑色文字
         font = QFont("Arial", 10)
         painter.setFont(font)
         painter.drawText(rect, Qt.AlignCenter, self.label)
@@ -569,15 +587,16 @@ class GridSequenceWidget(QWidget):
         self.track_list_layout = QVBoxLayout()
         # 为了让左侧列表与右侧轨道在垂直方向上严格对齐，
         # 这里的顶部边距与右侧轨道的顶部偏移（20 像素左右）保持一致。
-        self.track_list_layout.setContentsMargins(0, 20, 0, 5)
+        # 底部边距设为0，确保与右侧场景底部对齐
+        self.track_list_layout.setContentsMargins(0, 20, 0, 0)
         self.track_list_layout.setSpacing(0)
         self.track_list_widget.setLayout(self.track_list_layout)
         self.track_list_widget.setFixedWidth(150)  # 固定宽度150px
         # 背景透明，让其继承主界面的背景色/渐变
         self.track_list_widget.setStyleSheet("background: transparent;")
         
-        # 存储音轨项（勾选框和标签）
-        self.track_list_items = []  # [(checkbox, label, track), ...]
+        # 存储音轨项（标签）
+        self.track_list_items = []  # [(label, track), ...]
         
         # 左侧固定区域：音轨名称和勾选框（使用QScrollArea实现垂直滚动）
         from PyQt5.QtWidgets import QScrollArea
@@ -1030,8 +1049,8 @@ class GridSequenceWidget(QWidget):
                 
                 # 根据轨道数量调整场景高度（增加额外高度确保最后一行能显示）
                 if self.tracks:
-                    # 每个轨道60px高度，加上底部边距和额外空间确保滚动到底部时最后一行可见
-                    scene_height = len(self.tracks) * 60 + 100  # 增加额外高度
+                    # 每个轨道60px高度，顶部偏移20px，确保与左侧列表对齐
+                    scene_height = len(self.tracks) * 60 + 20  # 顶部偏移20px
                 else:
                     scene_height = 200
                 
@@ -1369,10 +1388,8 @@ class GridSequenceWidget(QWidget):
         """更新左侧音轨列表（勾选框和名称）"""
         # 清除现有项
         for item in self.track_list_items:
-            checkbox, label, track = item
-            checkbox.setParent(None)
+            label, track = item
             label.setParent(None)
-            checkbox.deleteLater()
             label.deleteLater()
         self.track_list_items.clear()
         
@@ -1397,12 +1414,7 @@ class GridSequenceWidget(QWidget):
             # 使用底部边框来区分音轨，避免额外占用垂直空间
             track_item_widget.setStyleSheet("border-bottom: 1px solid #CCCCCC;")
             
-            # 创建勾选框
-            checkbox = QCheckBox()
-            checkbox.setChecked(track.enabled)
-            checkbox.stateChanged.connect(lambda state, t=track: self.on_track_checkbox_changed(t, state == Qt.Checked))
-            track_item_layout.addWidget(checkbox)
-            
+            # 不再显示勾选框，播放设置由播放设置面板控制
             # 创建音轨名称标签（可点击）
             label = QLabel(track.name)
             # 使用较小的 padding，避免撑高单行高度
@@ -1428,16 +1440,12 @@ class GridSequenceWidget(QWidget):
             self.track_list_layout.addWidget(track_item_widget)
             
             # 保存引用
-            self.track_list_items.append((checkbox, label, track))
+            self.track_list_items.append((label, track))
         
-        # 添加弹性空间，确保音轨列表从顶部开始
-        self.track_list_layout.addStretch()
+        # 不再添加底部弹性空间，避免与右侧序列区域底部错位
+        # 顶部边距（20px）已通过 setContentsMargins 设置，确保与右侧轨道顶部对齐
     
-    def on_track_checkbox_changed(self, track, enabled):
-        """音轨勾选框状态改变"""
-        track.enabled = enabled
-        self.track_enabled_changed.emit(track, enabled)
-        self.refresh()
+    # 不再需要on_track_checkbox_changed方法，因为已移除勾选框
     
     def on_render_waveform_clicked(self):
         """渲染音轨选择按钮点击"""
@@ -2251,6 +2259,28 @@ class GridSequenceWidget(QWidget):
                     self.zoom_scale = new_scale
                     self.pixels_per_beat = self.base_pixels_per_beat * self.zoom_scale
                 
+                # 关键修复：更新场景宽度，确保滚动条范围正确
+                # 重新计算场景宽度（基于新的pixels_per_beat）
+                max_x = 100  # 至少100像素（轨道标签宽度）
+                for track in self.tracks:
+                    if track.track_type == TrackType.DRUM_TRACK:
+                        for event in track.drum_events:
+                            end_beats = event.end_beat
+                            x = end_beats * self.pixels_per_beat + 20
+                            max_x = max(max_x, x)
+                    else:
+                        for note in track.notes:
+                            start_beats = note.start_time * self.bpm / 60.0
+                            duration_beats = note.duration * self.bpm / 60.0
+                            end_beats = start_beats + duration_beats
+                            x = end_beats * self.pixels_per_beat + 20
+                            max_x = max(max_x, x)
+                
+                # 更新场景宽度
+                scene_width = max(1000, max_x + 200)  # 内容宽度 + 200px边距，最小1000px
+                scene_rect = self.scene.sceneRect()
+                self.scene.setSceneRect(0, 0, scene_width, scene_rect.height())
+                
                 # 缩放后，调整滚动位置，使鼠标位置的场景坐标保持不变
                 scene_pos_after = self.view.mapToScene(view_pos)
                 if abs(scene_pos_after.x() - scene_pos_before.x()) > 0.1:
@@ -2258,10 +2288,15 @@ class GridSequenceWidget(QWidget):
                     delta_pixels = scene_pos_before.x() - scene_pos_after.x()
                     # 调整滚动条位置
                     new_scroll_value = old_scroll_value + int(delta_pixels)
+                    # 确保滚动值在有效范围内
+                    new_scroll_value = max(scroll_bar.minimum(), min(new_scroll_value, scroll_bar.maximum()))
                     scroll_bar.setValue(new_scroll_value)
                 else:
                     # 如果没有明显偏移，保持原滚动位置按比例调整
-                    scroll_bar.setValue(int(old_scroll_value * (new_scale / current_scale)))
+                    new_scroll_value = int(old_scroll_value * (new_scale / current_scale))
+                    # 确保滚动值在有效范围内
+                    new_scroll_value = max(scroll_bar.minimum(), min(new_scroll_value, scroll_bar.maximum()))
+                    scroll_bar.setValue(new_scroll_value)
                 
             event.accept()
             return

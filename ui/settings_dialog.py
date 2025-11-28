@@ -364,6 +364,11 @@ class SettingsDialog(QDialog):
         self.stack_overlapped_checkbox.setChecked(self.settings_manager.is_stack_overlapped_notes_enabled())
         layout.addWidget(self.stack_overlapped_checkbox)
 
+        # 根据力度显示透明度
+        self.velocity_opacity_checkbox = QCheckBox("根据力度显示音符透明度（力度越小越透明，一眼看出主要发力音符）")
+        self.velocity_opacity_checkbox.setChecked(self.settings_manager.is_velocity_opacity_enabled())
+        layout.addWidget(self.velocity_opacity_checkbox)
+
         # 播放线刷新率（毫秒）
         refresh_layout = QHBoxLayout()
         refresh_label = QLabel("播放线刷新间隔 (毫秒，数值越小越流畅、但更耗性能):")
@@ -508,6 +513,10 @@ class SettingsDialog(QDialog):
             self.snap_to_beat_checkbox.setChecked(self.settings_manager.is_snap_to_beat_enabled())
         if hasattr(self, "allow_overlap_checkbox"):
             self.allow_overlap_checkbox.setChecked(self.settings_manager.is_overlap_allowed())
+        if hasattr(self, "stack_overlapped_checkbox"):
+            self.stack_overlapped_checkbox.setChecked(self.settings_manager.is_stack_overlapped_notes_enabled())
+        if hasattr(self, "velocity_opacity_checkbox"):
+            self.velocity_opacity_checkbox.setChecked(self.settings_manager.is_velocity_opacity_enabled())
         if hasattr(self, "playhead_refresh_spinbox"):
             self.playhead_refresh_spinbox.setValue(self.settings_manager.get_playhead_refresh_interval())
 
@@ -687,6 +696,8 @@ class SettingsDialog(QDialog):
             self.settings_manager.set_allow_overlap(self.allow_overlap_checkbox.isChecked())
         if hasattr(self, "stack_overlapped_checkbox"):
             self.settings_manager.set_stack_overlapped_notes(self.stack_overlapped_checkbox.isChecked())
+        if hasattr(self, "velocity_opacity_checkbox"):
+            self.settings_manager.set_velocity_opacity_enabled(self.velocity_opacity_checkbox.isChecked())
         if hasattr(self, "playhead_refresh_spinbox"):
             self.settings_manager.set_playhead_refresh_interval(self.playhead_refresh_spinbox.value())
         

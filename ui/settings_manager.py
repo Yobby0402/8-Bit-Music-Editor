@@ -17,7 +17,8 @@ class SettingsManager(QObject):
     DEFAULT_SETTINGS = {
         "snap_to_beat": True,      # 是否吸附对齐到节拍
         "allow_overlap": False,    # 是否允许重叠
-        "stack_overlapped_notes": False,  # 是否将重叠音符以“蜘蛛纸牌”方式垂直摞起
+        "stack_overlapped_notes": False,  # 是否将重叠音符以"蜘蛛纸牌"方式垂直摞起
+        "show_velocity_opacity": False,  # 是否根据力度显示音符透明度（力度越小越透明）
         # 播放相关
         "playhead_refresh_interval_ms": 50,    # 播放线刷新间隔（毫秒），默认50ms≈20FPS
         # 显示与主题相关设置
@@ -217,6 +218,15 @@ class SettingsManager(QObject):
     def set_button_font_family(self, family: str):
         """设置按钮字体族"""
         self.set("ui_button_font_family", family or "")
+
+    # 力度透明度相关
+    def is_velocity_opacity_enabled(self) -> bool:
+        """是否启用根据力度显示透明度"""
+        return bool(self.get("show_velocity_opacity", False))
+
+    def set_velocity_opacity_enabled(self, enabled: bool):
+        """设置是否启用根据力度显示透明度"""
+        self.set("show_velocity_opacity", bool(enabled))
 
 
 # 全局设置管理器实例

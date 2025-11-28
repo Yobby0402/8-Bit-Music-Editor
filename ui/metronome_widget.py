@@ -39,36 +39,44 @@ class MetronomeWidget(QWidget):
         """初始化UI"""
         # 使用水平布局，一排排列
         layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
         self.setLayout(layout)
         self.setMaximumHeight(80)
+        self.setMinimumHeight(50)
         
         # 开关按钮（去掉"节拍器"标题，按钮显示"节拍器：开启"/"节拍器：关闭"）
         self.toggle_button = QPushButton("节拍器：开启")
         self.toggle_button.setCheckable(True)
-        self.toggle_button.setMinimumWidth(100)
-        self.toggle_button.setMaximumWidth(120)
+        self.toggle_button.setMinimumWidth(90)
+        self.toggle_button.setMaximumWidth(110)
+        # 设置按钮大小策略，允许在小窗口时缩小
+        from PyQt5.QtWidgets import QSizePolicy
+        self.toggle_button.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
         self.toggle_button.clicked.connect(self.on_toggle)
         layout.addWidget(self.toggle_button)
         
         # 可视化指示器（水平排列）
         self.beat_indicator = BeatIndicatorWidget()
-        self.beat_indicator.setMinimumWidth(200)
-        self.beat_indicator.setMinimumHeight(60)
+        self.beat_indicator.setMinimumWidth(150)  # 减小最小宽度
+        self.beat_indicator.setMinimumHeight(50)
         self.beat_indicator.setMaximumHeight(70)
+        # 设置指示器大小策略
+        self.beat_indicator.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Preferred)
         layout.addWidget(self.beat_indicator)
         
-        # BPM显示
-        self.bpm_label = QLabel(f"BPM: {int(self.bpm)}")
-        self.bpm_label.setAlignment(Qt.AlignCenter)
-        self.bpm_label.setMinimumWidth(70)
-        layout.addWidget(self.bpm_label)
+        # BPM显示（移除，因为主窗口已经有BPM控制）
+        # self.bpm_label = QLabel(f"BPM: {int(self.bpm)}")
+        # self.bpm_label.setAlignment(Qt.AlignCenter)
+        # self.bpm_label.setMinimumWidth(70)
+        # layout.addWidget(self.bpm_label)
         
         layout.addStretch()
     
     def set_bpm(self, bpm: float):
         """设置BPM"""
         self.bpm = bpm
-        self.bpm_label.setText(f"BPM: {int(bpm)}")
+        # BPM显示已移除，现在由主窗口的BPM控件显示
         
         # 更新定时器间隔
         if self.metronome_timer.isActive():

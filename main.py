@@ -6,6 +6,12 @@
 
 import sys
 import os
+
+# 确保项目根目录在 Python 路径中，以便正确导入模块
+_project_root = os.path.dirname(os.path.abspath(__file__))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont

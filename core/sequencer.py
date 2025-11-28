@@ -44,6 +44,11 @@ class Sequencer:
         
         # 命令历史管理器
         self.command_history = CommandHistory(max_history=100)
+        
+        # 播放时的音轨音量占比 {track_id: ratio (0-1)}，None表示使用track.volume
+        self.playback_volume_ratios: dict = {}
+        # 播放时的音轨启用状态 {track_id: enabled (bool)}，None表示使用track.enabled
+        self.playback_enabled_tracks: dict = {}
     
     def set_project(self, project: Project) -> None:
         """设置项目"""
@@ -229,7 +234,7 @@ class Sequencer:
     
     def play(self, start_time: float = 0.0, loop: bool = False) -> None:
         """
-        播放项目
+        播放项目（使用每个音轨单独播放，支持实时音量控制）
         
         Args:
             start_time: 开始播放时间（秒）
@@ -247,33 +252,69 @@ class Sequencer:
         if end_time <= start_time:
             return
         
-        # 生成音频（会根据当前项目的BPM生成）
-        audio = self.audio_engine.generate_project_audio(
+        # 设置播放启用状态
+        if hasattr(self, 'playback_enabled_tracks') and self.playback_enabled_tracks:
+            self.project._playback_enabled_tracks = self.playback_enabled_tracks
+        else:
+            self.project._playback_enabled_tracks = None
+        
+        # 为每个音轨生成单独的音频
+        track_audio_list = self.audio_engine.generate_track_audio_list(
             self.project, start_time, end_time
         )
         
-        if len(audio) == 0:
+        if not track_audio_list:
             return
         
-        # 根据生成的音频长度计算真实结束时间，用于播放线和停止逻辑
-        duration = len(audio) / float(self.audio_engine.sample_rate)
-        self.playback_state.end_time = start_time + duration
+        # 计算总时长（使用最长的音轨）
+        max_duration = 0.0
+        for track, audio_data, track_id in track_audio_list:
+            if len(audio_data) > 0:
+                duration = len(audio_data) / float(self.audio_engine.sample_rate)
+                max_duration = max(max_duration, duration)
         
-        # 播放音频
-        self._current_sound = self.audio_engine.play_audio(audio, loop=loop)
+        self.playback_state.end_time = start_time + max_duration
+        
+        # 为每个音轨单独播放，使用Channel支持实时音量控制
+        # 先准备所有Sound对象和Channel，然后同步启动以确保对齐
+        self._current_sounds = []
+        channels_to_start = []  # [(channel, sound, loops), ...]
+        
+        for track, audio_data, track_id in track_audio_list:
+            if len(audio_data) == 0:
+                continue
+            
+            # 获取该音轨的音量占比
+            volume_ratio = self.playback_volume_ratios.get(track_id, 1.0) if self.playback_volume_ratios else 1.0
+            initial_volume = track.volume * volume_ratio
+            
+            # 创建Sound对象和Channel，但不立即播放
+            sound, channel = self.audio_engine.prepare_track_audio(
+                audio_data,
+                volume=initial_volume,
+                track_id=track_id
+            )
+            
+            if sound and channel:
+                self._current_sounds.append(sound)
+                channels_to_start.append((channel, sound, -1 if loop else 0))
+        
+        # 同步启动所有Channel，确保音轨对齐
+        for channel, sound, loops in channels_to_start:
+            channel.play(sound, loops=loops)
+        
         self.playback_state.is_playing = True
         self.playback_state.current_time = start_time
     
     def pause(self) -> None:
         """暂停播放"""
-        if self._current_sound:
-            self._current_sound.stop()
+        self.audio_engine.stop_all()
         self.playback_state.is_playing = False
     
     def stop(self) -> None:
         """停止播放"""
         self.audio_engine.stop_all()
-        self._current_sound = None
+        self._current_sounds = []
         self.playback_state.is_playing = False
         self.playback_state.current_time = 0.0
         self.playback_state.end_time = 0.0

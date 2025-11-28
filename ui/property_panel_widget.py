@@ -38,9 +38,10 @@ class PropertyPanelWidget(QWidget):
         self.current_notes: list = []  # 多选音符列表 [(note, track), ...]
         self.current_track_for_edit: Track = None  # 当前编辑的音轨
         self.bpm: float = 120.0  # 默认BPM
-        # 批量编辑控件是否被用户主动修改的标记（用于区分“未触碰”与“需要应用”）
+        # 批量编辑控件是否被用户主动修改的标记（用于区分"未触碰"与"需要应用"）
         self._batch_waveform_dirty: bool = False
         self._batch_velocity_dirty: bool = False
+        self._batch_velocity_offset_dirty: bool = False
         self._batch_duty_dirty: bool = False
         
         self.init_ui()
@@ -52,6 +53,31 @@ class PropertyPanelWidget(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
         self.setLayout(layout)
+        
+        # 设置属性面板的最大高度，确保不挡住面板切换按钮
+        # 使用滚动区域来容纳内容，而不是让面板无限增长
+        from PyQt5.QtWidgets import QScrollArea
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        # 创建内容容器
+        content_widget = QWidget()
+        content_layout = QVBoxLayout()
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(6)
+        content_widget.setLayout(content_layout)
+        
+        # 将内容添加到滚动区域
+        scroll_area.setWidget(content_widget)
+        
+        # 将滚动区域添加到主布局
+        layout.addWidget(scroll_area)
+        
+        # 保存引用以便后续添加控件
+        self.content_layout = content_layout
+        self.scroll_area = scroll_area
 
         # 应用主题中的标签/输入框/下拉框等基础样式，使风格与主界面一致
         try:
@@ -69,34 +95,34 @@ class PropertyPanelWidget(QWidget):
         # 标题
         title = QLabel("属性面板")
         title.setStyleSheet("font-weight: bold; font-size: 14px; padding: 6px 4px;")
-        layout.addWidget(title)
+        self.content_layout.addWidget(title)
         
         # 空状态提示
         self.empty_label = QLabel("未选中音符\n\n请点击序列编辑器中的音符来编辑属性")
         self.empty_label.setAlignment(Qt.AlignCenter)
         self.empty_label.setStyleSheet("color: gray; padding: 16px;")
-        layout.addWidget(self.empty_label)
+        self.content_layout.addWidget(self.empty_label)
         
         # 多选提示
         self.multi_select_label = QLabel("")
         self.multi_select_label.setAlignment(Qt.AlignCenter)
         self.multi_select_label.setStyleSheet("color: blue; padding: 8px; font-weight: bold;")
         self.multi_select_label.setVisible(False)
-        layout.addWidget(self.multi_select_label)
+        self.content_layout.addWidget(self.multi_select_label)
         
         # 属性编辑区域（初始隐藏）
         self.properties_group = QGroupBox("音符属性")
         properties_layout = QVBoxLayout()
         self.properties_group.setLayout(properties_layout)
         self.properties_group.setVisible(False)
-        layout.addWidget(self.properties_group)
+        self.content_layout.addWidget(self.properties_group)
         
         # 音轨编辑区域（初始隐藏）
         self.track_edit_group = QGroupBox("音轨编辑")
         track_edit_layout = QVBoxLayout()
         self.track_edit_group.setLayout(track_edit_layout)
         self.track_edit_group.setVisible(False)
-        layout.addWidget(self.track_edit_group)
+        self.content_layout.addWidget(self.track_edit_group)
         
         # 音轨类型选择
         track_type_layout = QHBoxLayout()
@@ -126,7 +152,7 @@ class PropertyPanelWidget(QWidget):
         batch_layout = QVBoxLayout()
         self.batch_edit_group.setLayout(batch_layout)
         self.batch_edit_group.setVisible(False)
-        layout.addWidget(self.batch_edit_group)
+        self.content_layout.addWidget(self.batch_edit_group)
         
         # 批量编辑：波形（立即生效）
         batch_waveform_layout = QHBoxLayout()
@@ -152,6 +178,19 @@ class PropertyPanelWidget(QWidget):
         self.batch_velocity_slider.valueChanged.connect(lambda v: self.batch_velocity_label.setText(str(v)))
         batch_velocity_layout.addStretch()
         batch_layout.addLayout(batch_velocity_layout)
+        
+        # 批量编辑：力度偏移（在原有基础上加减）
+        batch_velocity_offset_layout = QHBoxLayout()
+        batch_velocity_offset_layout.addWidget(QLabel("力度偏移:"))
+        self.batch_velocity_offset_spinbox = QSpinBox()
+        self.batch_velocity_offset_spinbox.setRange(-127, 127)
+        self.batch_velocity_offset_spinbox.setValue(0)
+        self.batch_velocity_offset_spinbox.setSingleStep(1)
+        self.batch_velocity_offset_spinbox.setSuffix(" (在原有基础上)")
+        self.batch_velocity_offset_spinbox.valueChanged.connect(self.on_batch_velocity_offset_changed)
+        batch_velocity_offset_layout.addWidget(self.batch_velocity_offset_spinbox)
+        batch_velocity_offset_layout.addStretch()
+        batch_layout.addLayout(batch_velocity_offset_layout)
         
         # 批量编辑：占空比（仅方波，立即生效）
         batch_duty_layout = QHBoxLayout()
@@ -341,7 +380,7 @@ class PropertyPanelWidget(QWidget):
         note_effects_layout = QVBoxLayout()
         self.note_effects_group.setLayout(note_effects_layout)
         self.note_effects_group.setVisible(False)
-        layout.addWidget(self.note_effects_group)
+        self.content_layout.addWidget(self.note_effects_group)
         
         # 音符颤音（音高调制）
         note_vibrato_group = QGroupBox("颤音 (Vibrato)")
@@ -384,7 +423,7 @@ class PropertyPanelWidget(QWidget):
         self.effects_group = QGroupBox("轨道效果")
         effects_layout = QVBoxLayout()
         self.effects_group.setLayout(effects_layout)
-        layout.addWidget(self.effects_group)
+        self.content_layout.addWidget(self.effects_group)
         
         # 滤波器
         filter_group = QGroupBox("滤波器")
@@ -520,7 +559,7 @@ class PropertyPanelWidget(QWidget):
         
         effects_layout.addWidget(tremolo_group)
         
-        layout.addStretch()
+        self.content_layout.addStretch()
     
     def set_note(self, note, track: Track):
         """
@@ -597,7 +636,12 @@ class PropertyPanelWidget(QWidget):
             # 进入多选批量编辑时，认为所有批量控件尚未被用户触碰
             self._batch_waveform_dirty = False
             self._batch_velocity_dirty = False
+            self._batch_velocity_offset_dirty = False
             self._batch_duty_dirty = False
+            # 重置力度偏移控件
+            self.batch_velocity_offset_spinbox.blockSignals(True)
+            self.batch_velocity_offset_spinbox.setValue(0)
+            self.batch_velocity_offset_spinbox.blockSignals(False)
     
     def set_track(self, track: Track):
         """
@@ -661,10 +705,15 @@ class PropertyPanelWidget(QWidget):
                 else:
                     self.track_type_combo.setCurrentIndex(0)  # 默认主旋律
             self.track_type_combo.blockSignals(False)
-            # 进入音轨批量编辑模式时，同样重置“脏标记”
+            # 进入音轨批量编辑模式时，同样重置"脏标记"
             self._batch_waveform_dirty = False
             self._batch_velocity_dirty = False
+            self._batch_velocity_offset_dirty = False
             self._batch_duty_dirty = False
+            # 重置力度偏移控件
+            self.batch_velocity_offset_spinbox.blockSignals(True)
+            self.batch_velocity_offset_spinbox.setValue(0)
+            self.batch_velocity_offset_spinbox.blockSignals(False)
     
     def update_ui(self):
         """更新UI显示"""
@@ -1189,6 +1238,19 @@ class PropertyPanelWidget(QWidget):
             return
         # 标记为用户确实修改过占空比
         self._batch_duty_dirty = True
+        # 发送批量修改信号（立即生效）
+        self.batch_property_changed.emit(self.current_notes)
+    
+    def on_batch_velocity_offset_changed(self, value: int):
+        """批量力度偏移改变（立即生效）"""
+        if not self.current_notes:
+            return
+        # 如果偏移值为0，不标记为脏（避免无意义的修改）
+        if value == 0:
+            self._batch_velocity_offset_dirty = False
+        else:
+            # 标记为用户确实修改过力度偏移
+            self._batch_velocity_offset_dirty = True
         # 发送批量修改信号（立即生效）
         self.batch_property_changed.emit(self.current_notes)
     
