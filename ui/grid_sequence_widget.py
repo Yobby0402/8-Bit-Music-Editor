@@ -595,6 +595,12 @@ class GridSequenceWidget(QWidget):
         self.scene = QGraphicsScene()
         self.view = QGraphicsView(self.scene)
         self.view.setRenderHint(QPainter.Antialiasing)
+        # 关键修复：默认 QGraphicsView 会在视口内居中对齐场景，
+        # 当轨道数量较少、场景高度小于视口高度时，右侧轨道区域会整体垂直居中，
+        # 而左侧轨道列表是从顶部开始布局的，导致前几条轨道看起来“下移”，
+        # 直到轨道足够多填满视口才与左侧对齐。
+        # 这里显式设置为左上对齐，保证轨道始终从顶部开始绘制，和左侧列表一致。
+        self.view.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         
         # 启用框选模式（RubberBandDrag）
         self.view.setDragMode(QGraphicsView.RubberBandDrag)
@@ -632,8 +638,8 @@ class GridSequenceWidget(QWidget):
         self.scene.selectionChanged.connect(self.on_selection_changed)
         
         # 设置视图最小高度，确保即使音轨较少也能占满区域
-        # 注意：不要设置最大高度，让布局管理器控制，但保持最小高度固定
-        self.view.setMinimumHeight(200)
+        # 适当降低高度上限，便于主窗口整体缩小
+        self.view.setMinimumHeight(160)
         # 设置大小策略：允许垂直和水平拉伸，但不要超出父容器
         from PyQt5.QtWidgets import QSizePolicy
         self.view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -892,14 +898,15 @@ class GridSequenceWidget(QWidget):
         """删除选中的音符（支持多选，通过信号通知主窗口处理）"""
         # 收集所有要删除的音符
         notes_to_delete = []
+        drum_deleted = False
         
         # 先处理单个选中
         if self.selected_item and self.selected_track:
             if isinstance(self.selected_item, DrumEvent):
-                # 打击乐事件：直接删除（暂时不支持批量删除打击乐事件）
+                # 打击乐事件：直接删除，并刷新界面
                 if self.selected_item in self.selected_track.drum_events:
                     self.selected_track.remove_drum_event(self.selected_item)
-                    self.refresh_ui()
+                    drum_deleted = True
             elif self.selected_item in self.selected_track.notes:
                 notes_to_delete.append((self.selected_item, self.selected_track))
         self.selected_item = None
@@ -912,6 +919,7 @@ class GridSequenceWidget(QWidget):
                     # 打击乐事件：直接删除
                     if item in track.drum_events:
                         track.remove_drum_event(item)
+                        drum_deleted = True
                 elif item in track.notes:
                     notes_to_delete.append((item, track))
             self.selected_items.clear()
@@ -924,6 +932,10 @@ class GridSequenceWidget(QWidget):
             else:
                 # 批量删除，使用新信号
                 self.notes_deleted.emit(notes_to_delete)
+
+        # 如果有打击乐事件被删除，需要刷新一次界面以更新轨道显示
+        if drum_deleted:
+            self.refresh(force_full_refresh=True)
     
     def set_tracks(self, tracks: list, preserve_selection: bool = False):
         """设置轨道列表
@@ -1126,10 +1138,19 @@ class GridSequenceWidget(QWidget):
         
         # 根据轨道数量调整场景高度
         if self.tracks:
-            # 每个轨道60px高度，加上底部边距和额外空间确保滚动到底部时最后一行可见
-            scene_height = len(self.tracks) * 60 + 100  # 增加额外高度
+            # 每个轨道60px高度
+            content_height = len(self.tracks) * 60 + 40
         else:
-            scene_height = 200
+            content_height = 200
+
+        # 为了避免“上下一大片空白”的观感问题，这里再与视口高度取一个最大值：
+        # - 当轨道较少时，保证网格和轨道线至少铺满当前视口高度；
+        # - 当轨道较多时，仍然以内容高度为准，通过滚动条浏览。
+        try:
+            viewport_height = self.view.viewport().height()
+        except Exception:
+            viewport_height = 200
+        scene_height = max(content_height, viewport_height)
         
         # 根据内容调整场景大小
         scene_width = max(2000, max_x)
@@ -1368,10 +1389,13 @@ class GridSequenceWidget(QWidget):
             # 创建音轨项容器
             track_item_widget = QWidget()
             track_item_layout = QHBoxLayout()
-            track_item_layout.setContentsMargins(2, 2, 2, 2)
+            # 统一使用 0 边距，使单个项的总高度严格为 60，和右侧轨道间距一致，避免上下错位
+            track_item_layout.setContentsMargins(0, 0, 0, 0)
             track_item_layout.setSpacing(5)
             track_item_widget.setLayout(track_item_layout)
             track_item_widget.setFixedHeight(60)  # 与右侧音轨高度一致
+            # 使用底部边框来区分音轨，避免额外占用垂直空间
+            track_item_widget.setStyleSheet("border-bottom: 1px solid #CCCCCC;")
             
             # 创建勾选框
             checkbox = QCheckBox()
@@ -1381,7 +1405,8 @@ class GridSequenceWidget(QWidget):
             
             # 创建音轨名称标签（可点击）
             label = QLabel(track.name)
-            label.setStyleSheet(f"color: {theme.get_color('text_primary')}; padding: 5px;")
+            # 使用较小的 padding，避免撑高单行高度
+            label.setStyleSheet(f"color: {theme.get_color('text_primary')}; padding: 4px;")
             label.setWordWrap(False)
             label.setCursor(Qt.PointingHandCursor)
             
@@ -1401,14 +1426,6 @@ class GridSequenceWidget(QWidget):
             
             # 添加到布局
             self.track_list_layout.addWidget(track_item_widget)
-
-            # 在相邻音轨之间添加一条分隔线，便于区分
-            if i < len(self.tracks) - 1:
-                line = QFrame()
-                line.setFrameShape(QFrame.HLine)
-                line.setFrameShadow(QFrame.Sunken)
-                line.setStyleSheet("color: #CCCCCC;")
-                self.track_list_layout.addWidget(line)
             
             # 保存引用
             self.track_list_items.append((checkbox, label, track))
@@ -1756,30 +1773,21 @@ class GridSequenceWidget(QWidget):
         track_group.track = track
         track_group.track_index = track_index
         track_group.set_track_y(y)
-        
-        # 如果TrackGroup已经有轨道线，只需要更新它
+
+        # 你反馈右侧轨道区域的横线基本看不到，而且现在左右已经完美对齐，
+        # 横向分割线的存在反而显得多余，这里直接移除这部分功能：
+        # - 不再创建或更新轨道线；
+        # - 如果之前有旧的轨道线，安全地从场景中移除。
         if track_group.track_line:
-            # 更新轨道线长度（根据实际内容长度）
-            scene_width = self.scene.sceneRect().width()
-            track_group.update_track_line(scene_width)
-            
-            # 更新向后兼容的列表引用
-            if track_index < len(self.track_line_items):
-                self.track_line_items[track_index] = track_group.track_line
-            else:
-                self.track_line_items.append(track_group.track_line)
-            
-            return  # 元素已存在，不需要重新创建
-        
-        # 创建轨道线（设置低z值，确保在底层）
-        pen = QPen(QColor(200, 200, 200), 1)
-        scene_width = self.scene.sceneRect().width()
-        # 创建线项（从x=0开始，因为左侧固定区域已经处理了标签和勾选框）
-        line_item = QGraphicsLineItem(0, 0, scene_width, 0)
-        line_item.setPen(pen)
-        line_item.setZValue(0)  # 设置最低z值，确保在底层
-        track_group.add_track_line(line_item, scene_width)
-        self.track_line_items.append(line_item)
+            try:
+                if track_group.track_line.scene():
+                    self.scene.removeItem(track_group.track_line)
+            except Exception:
+                pass
+            track_group.track_line = None
+
+        if track_index < len(self.track_line_items):
+            self.track_line_items[track_index] = None
     
     def _draw_tracks_and_blocks(self):
         """绘制所有轨道和块（用于全量刷新）"""
@@ -1833,6 +1841,15 @@ class GridSequenceWidget(QWidget):
         scene_rect = self.scene.sceneRect()
         scene_width = scene_rect.width()
         scene_height = scene_rect.height()
+
+        # 再次与视口高度取一个最大值，保证纵向网格线可以一直画到底部，
+        # 避免轨道较少时下方出现一大片“没有拍线”的空白区域。
+        try:
+            viewport_height = self.view.viewport().height()
+        except Exception:
+            viewport_height = scene_height
+        if viewport_height > scene_height:
+            scene_height = viewport_height
         
         if scene_width <= 0 or scene_height <= 0:
             return  # 场景无效，不绘制

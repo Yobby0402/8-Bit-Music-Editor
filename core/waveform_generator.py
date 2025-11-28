@@ -47,10 +47,11 @@ class WaveformGenerator:
         num_samples = int(self.sample_rate * duration)
         t = np.linspace(0, duration, num_samples, False)
         
-        # 生成方波：使用正弦波和阈值比较
-        wave = np.sin(2 * np.pi * frequency * t + phase)
-        threshold = np.sin(2 * np.pi * duty_cycle)
-        wave = np.where(wave > threshold, amplitude, -amplitude)
+        # 生成方波：根据占空比直接在一个周期内划分「高/低」区域
+        # 使用相位归一化到 [0,1)，再与 duty_cycle 比较，避免之前通过正弦阈值导致
+        # 在 duty_cycle=0.25 等特殊值时几乎全程为 DC（只听到“pop”而没有音高）。
+        phase_norm = (frequency * t + phase / (2 * np.pi)) % 1.0
+        wave = np.where(phase_norm < duty_cycle, amplitude, -amplitude)
         
         return wave.astype(np.float32)
     

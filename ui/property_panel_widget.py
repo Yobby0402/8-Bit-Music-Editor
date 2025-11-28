@@ -17,6 +17,7 @@ from core.track_events import DrumEvent
 from core.effect_processor import (
     FilterParams, DelayParams, TremoloParams, VibratoParams, FilterType
 )
+from ui.theme import theme_manager
 
 
 class PropertyPanelWidget(QWidget):
@@ -48,23 +49,38 @@ class PropertyPanelWidget(QWidget):
     def init_ui(self):
         """初始化UI"""
         layout = QVBoxLayout()
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
         self.setLayout(layout)
+
+        # 应用主题中的标签/输入框/下拉框等基础样式，使风格与主界面一致
+        try:
+            theme = theme_manager.current_theme
+            base_style = ""
+            base_style += theme.get_style("label")
+            base_style += theme.get_style("line_edit")
+            base_style += theme.get_style("combo_box")
+            base_style += theme.get_style("group_box")
+            self.setStyleSheet(base_style)
+        except Exception:
+            # 主题获取失败时不影响功能
+            pass
         
         # 标题
         title = QLabel("属性面板")
-        title.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px;")
+        title.setStyleSheet("font-weight: bold; font-size: 14px; padding: 6px 4px;")
         layout.addWidget(title)
         
         # 空状态提示
         self.empty_label = QLabel("未选中音符\n\n请点击序列编辑器中的音符来编辑属性")
         self.empty_label.setAlignment(Qt.AlignCenter)
-        self.empty_label.setStyleSheet("color: gray; padding: 20px;")
+        self.empty_label.setStyleSheet("color: gray; padding: 16px;")
         layout.addWidget(self.empty_label)
         
         # 多选提示
         self.multi_select_label = QLabel("")
         self.multi_select_label.setAlignment(Qt.AlignCenter)
-        self.multi_select_label.setStyleSheet("color: blue; padding: 10px; font-weight: bold;")
+        self.multi_select_label.setStyleSheet("color: blue; padding: 8px; font-weight: bold;")
         self.multi_select_label.setVisible(False)
         layout.addWidget(self.multi_select_label)
         
@@ -310,7 +326,14 @@ class PropertyPanelWidget(QWidget):
         reset_button.clicked.connect(self.reset_changes)
         button_layout.addWidget(reset_button)
         button_layout.addStretch()
-        
+
+        # 使用统一的小按钮样式
+        try:
+            theme = theme_manager.current_theme
+            reset_button.setStyleSheet(theme.get_style("button_small"))
+        except Exception:
+            pass
+
         properties_layout.addLayout(button_layout)
         
         # ========== 单个音符效果编辑区域 ==========

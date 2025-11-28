@@ -359,8 +359,12 @@ class AudioEngine:
         # - 如果在这里再根据 (original_bpm, project.bpm) 做缩放，
         #   音频时长会被拉伸/压缩，而网格上的音符位置仍然保持原始秒数，
         #   导致播放线“越来越快超过音符”。
-        # - 因此生成项目音频时统一使用 bpm=None, original_bpm=None，禁用 BPM 比例缩放。
-        return self.mix_tracks(enabled_tracks, start_time, end_time, bpm=None, original_bpm=None)
+        # - 因此这里仍然禁用「根据 original_bpm 进行二次缩放」：original_bpm 始终为 None。
+        # - 但为了让使用“节拍”为单位的鼓点（DrumEvent）能够按当前 BPM 正确换算为秒，
+        #   需要把 project.bpm 作为 bpm 传入，仅用于 DrumEvent 的节拍→秒转换。
+
+        project_bpm = getattr(project, "bpm", None)
+        return self.mix_tracks(enabled_tracks, start_time, end_time, bpm=project_bpm, original_bpm=None)
     
     def play_audio(
         self,

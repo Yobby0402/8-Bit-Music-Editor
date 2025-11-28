@@ -9,14 +9,15 @@ from PyQt5.QtWidgets import (
     QMenuBar, QMenu, QToolBar, QStatusBar, QAction,
     QMessageBox, QFileDialog, QSplitter, QDialog,
     QDockWidget, QSlider, QDialogButtonBox, QLabel, QComboBox, QApplication, QDesktopWidget,
-    QProgressDialog
+    QProgressDialog, QFormLayout, QGroupBox, QDoubleSpinBox
 )
-from PyQt5.QtCore import Qt, QTimer, QSettings
+from PyQt5.QtCore import Qt, QTimer, QSettings, QEvent
+import json
 from PyQt5.QtGui import QIcon, QKeySequence, QKeyEvent, QFont, QBrush, QColor
 import os
 
 from core.sequencer import Sequencer
-from core.models import Project, WaveformType, Track, Note, TrackType
+from core.models import Project, WaveformType, Track, Note, TrackType, ADSRParams
 from core.midi_io import MidiIO
 from core.track_events import DrumType, DrumEvent
 
@@ -30,9 +31,556 @@ from ui.oscilloscope_widget import OscilloscopeWidget
 from ui.theme import theme_manager
 from ui.shortcut_manager import get_shortcut_manager
 from ui.shortcut_config_dialog import ShortcutConfigDialog
-from PyQt5.QtWidgets import QStackedWidget, QTabWidget, QPushButton, QButtonGroup, QSpinBox
+from PyQt5.QtWidgets import QStackedWidget, QTabWidget, QPushButton, QButtonGroup, QSpinBox, QCheckBox
 from ui.settings_manager import get_settings_manager
 from core.score_library import ScoreLibrary
+from core.seed_music_generator import (
+    generate_simple_project_from_seed,
+    SeedMusicStyle,
+    get_style_meta,
+    get_style_variants,
+    get_style_params,
+    StyleParams,
+    set_style_runtime_override,
+)
+
+
+class StyleParamsWidget(QWidget):
+    """
+    右侧 Dock 中用于展示 & 调整当前 Seed 风格参数的面板。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.settings = QSettings("8bit", "MusicMaker")
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(6)
+
+        self.summary_label = QLabel("尚未使用 Seed 生成项目。")
+        self.summary_label.setWordWrap(True)
+        font = self.summary_label.font()
+        font.setPointSize(max(9, font.pointSize() - 1))
+        self.summary_label.setFont(font)
+        main_layout.addWidget(self.summary_label)
+
+        # 预设选择与管理（拆成上下两行，避免在窄窗口中挤在一行重叠）
+        preset_layout = QVBoxLayout()
+        preset_layout.setContentsMargins(0, 4, 0, 4)
+
+        # 第一行：标签 + 下拉框
+        preset_row_top = QHBoxLayout()
+        preset_label = QLabel("预设：")
+        self.preset_combo = QComboBox()
+        self.preset_combo.setMinimumWidth(160)
+        preset_row_top.addWidget(preset_label)
+        preset_row_top.addWidget(self.preset_combo, 1)
+        preset_layout.addLayout(preset_row_top)
+
+        # 第二行：按钮
+        preset_row_bottom = QHBoxLayout()
+        self.load_preset_button = QPushButton("加载预设")
+        self.save_preset_button = QPushButton("保存为预设")
+        preset_row_bottom.addStretch(1)
+        preset_row_bottom.addWidget(self.load_preset_button)
+        preset_row_bottom.addWidget(self.save_preset_button)
+        preset_layout.addLayout(preset_row_bottom)
+
+        main_layout.addLayout(preset_layout)
+
+        # 主旋律 / 低音 / 和声 / 鼓点 四个分组（改为可编辑控件）
+        self._current_style = None
+        self._current_variant = None
+        self._current_presets = {}
+
+        self.melody_wave_combo = QComboBox()
+        self.melody_duty_spin = QDoubleSpinBox()
+        self.melody_duty_spin.setRange(0.05, 0.95)
+        self.melody_duty_spin.setSingleStep(0.05)
+        self.melody_duty_spin.setDecimals(2)
+        self.melody_a_spin = QDoubleSpinBox()
+        self.melody_d_spin = QDoubleSpinBox()
+        self.melody_s_spin = QDoubleSpinBox()
+        self.melody_r_spin = QDoubleSpinBox()
+
+        self._init_adsr_spin(self.melody_a_spin, 0.0, 0.2, 0.001)
+        self._init_adsr_spin(self.melody_d_spin, 0.0, 0.5, 0.01)
+        self._init_adsr_spin(self.melody_s_spin, 0.0, 1.0, 0.05)
+        self._init_adsr_spin(self.melody_r_spin, 0.0, 0.8, 0.01)
+
+        self._init_wave_combo(self.melody_wave_combo)
+
+        main_layout.addWidget(
+            self._build_group(
+                "主旋律",
+                self.melody_wave_combo,
+                self.melody_duty_spin,
+                self.melody_a_spin,
+                self.melody_d_spin,
+                self.melody_s_spin,
+                self.melody_r_spin,
+            )
+        )
+
+        self.bass_wave_combo = QComboBox()
+        self.bass_duty_spin = QDoubleSpinBox()
+        self.bass_duty_spin.setRange(0.05, 0.95)
+        self.bass_duty_spin.setSingleStep(0.05)
+        self.bass_duty_spin.setDecimals(2)
+        self.bass_a_spin = QDoubleSpinBox()
+        self.bass_d_spin = QDoubleSpinBox()
+        self.bass_s_spin = QDoubleSpinBox()
+        self.bass_r_spin = QDoubleSpinBox()
+
+        self._init_adsr_spin(self.bass_a_spin, 0.0, 0.2, 0.001)
+        self._init_adsr_spin(self.bass_d_spin, 0.0, 0.5, 0.01)
+        self._init_adsr_spin(self.bass_s_spin, 0.0, 1.0, 0.05)
+        self._init_adsr_spin(self.bass_r_spin, 0.0, 0.8, 0.01)
+        self._init_wave_combo(self.bass_wave_combo)
+
+        main_layout.addWidget(
+            self._build_group(
+                "低音",
+                self.bass_wave_combo,
+                self.bass_duty_spin,
+                self.bass_a_spin,
+                self.bass_d_spin,
+                self.bass_s_spin,
+                self.bass_r_spin,
+            )
+        )
+
+        self.harmony_wave_combo = QComboBox()
+        self.harmony_duty_spin = QDoubleSpinBox()
+        self.harmony_duty_spin.setRange(0.05, 0.95)
+        self.harmony_duty_spin.setSingleStep(0.05)
+        self.harmony_duty_spin.setDecimals(2)
+        self.harmony_a_spin = QDoubleSpinBox()
+        self.harmony_d_spin = QDoubleSpinBox()
+        self.harmony_s_spin = QDoubleSpinBox()
+        self.harmony_r_spin = QDoubleSpinBox()
+
+        self._init_adsr_spin(self.harmony_a_spin, 0.0, 0.3, 0.001)
+        self._init_adsr_spin(self.harmony_d_spin, 0.0, 0.6, 0.01)
+        self._init_adsr_spin(self.harmony_s_spin, 0.0, 1.0, 0.05)
+        self._init_adsr_spin(self.harmony_r_spin, 0.0, 1.0, 0.01)
+        self._init_wave_combo(self.harmony_wave_combo)
+
+        main_layout.addWidget(
+            self._build_group(
+                "和声",
+                self.harmony_wave_combo,
+                self.harmony_duty_spin,
+                self.harmony_a_spin,
+                self.harmony_d_spin,
+                self.harmony_s_spin,
+                self.harmony_r_spin,
+            )
+        )
+
+        # 鼓点：只有一个整体缩放
+        self.drum_scale_spin = QDoubleSpinBox()
+        self.drum_scale_spin.setRange(0.3, 1.7)
+        self.drum_scale_spin.setSingleStep(0.05)
+        self.drum_scale_spin.setDecimals(2)
+        drum_group = QGroupBox("鼓点整体")
+        drum_layout = QFormLayout(drum_group)
+        drum_layout.setContentsMargins(6, 4, 6, 4)
+        self.drum_scale_label = QLabel("整体力度缩放：")
+        drum_layout.addRow(self.drum_scale_label, self.drum_scale_spin)
+        main_layout.addWidget(drum_group)
+
+        # 操作按钮（这里先预留位置，后续可扩展为“保存预设”等）
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 4, 0, 0)
+        self.apply_button = QPushButton("应用到当前风格")
+        btn_row.addWidget(self.apply_button)
+        btn_row.addStretch(1)
+        main_layout.addLayout(btn_row)
+
+        main_layout.addStretch(1)
+
+        self._style_name_map = {
+            SeedMusicStyle.CLASSIC_8BIT: "经典 8bit",
+            SeedMusicStyle.LOFI: "Lofi",
+            SeedMusicStyle.BATTLE: "战斗 / 紧张",
+            SeedMusicStyle.SUSPENSE: "悬疑 / 惊悚",
+            SeedMusicStyle.CALM: "舒缓 / 美好",
+        }
+
+        # 统一按钮/下拉字体，使用当前应用全局字体，避免与其它区域不一致
+        app = QApplication.instance()
+        if app is not None:
+            base_font = app.font()
+            for w in (
+                self.load_preset_button,
+                self.save_preset_button,
+                self.apply_button,
+                self.preset_combo,
+                self.melody_wave_combo,
+                self.bass_wave_combo,
+                self.harmony_wave_combo,
+            ):
+                w.setFont(base_font)
+
+        # 点击“应用到当前风格”时，将当前控件值写回运行时覆盖
+        self.apply_button.clicked.connect(self.apply_to_current_style)
+        self.save_preset_button.clicked.connect(self.save_current_as_preset)
+        self.load_preset_button.clicked.connect(self.load_selected_preset)
+
+    def _init_wave_combo(self, combo: QComboBox):
+        combo.clear()
+        combo.addItem("方波", WaveformType.SQUARE)
+        combo.addItem("三角波", WaveformType.TRIANGLE)
+        combo.addItem("锯齿波", WaveformType.SAWTOOTH)
+        # 一些环境风格可能会用到正弦波/噪声
+        if hasattr(WaveformType, "SINE"):
+            combo.addItem("正弦波", WaveformType.SINE)
+        combo.addItem("噪声", WaveformType.NOISE)
+
+    def _init_adsr_spin(self, spin: QDoubleSpinBox, minimum: float, maximum: float, step: float):
+        spin.setRange(minimum, maximum)
+        spin.setSingleStep(step)
+        spin.setDecimals(3)
+
+    def _build_group(
+        self,
+        title: str,
+        wave_combo: QComboBox,
+        duty_spin: QDoubleSpinBox,
+        a_spin: QDoubleSpinBox,
+        d_spin: QDoubleSpinBox,
+        s_spin: QDoubleSpinBox,
+        r_spin: QDoubleSpinBox,
+    ) -> QGroupBox:
+        box = QGroupBox(title)
+        layout = QFormLayout(box)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.addRow(QLabel("波形："), wave_combo)
+        layout.addRow(QLabel("占空比："), duty_spin)
+        layout.addRow(QLabel("Attack："), a_spin)
+        layout.addRow(QLabel("Decay："), d_spin)
+        layout.addRow(QLabel("Sustain："), s_spin)
+        layout.addRow(QLabel("Release："), r_spin)
+        return box
+
+    def _waveform_to_text(self, wf: WaveformType) -> str:
+        name = getattr(wf, "name", str(wf))
+        mapping = {
+            "SQUARE": "方波",
+            "TRIANGLE": "三角波",
+            "SAWTOOTH": "锯齿波",
+            "SINE": "正弦波",
+            "NOISE": "噪声",
+        }
+        return mapping.get(name, name)
+
+    def _adsr_to_text(self, adsr) -> str:
+        return f"A={adsr.attack:.3f}, D={adsr.decay:.3f}, S={adsr.sustain:.2f}, R={adsr.release:.3f}"
+
+    def set_style(self, style: SeedMusicStyle, variant_id: str, project: Project):
+        """
+        根据当前 Seed 生成结果更新显示（仅展示参数，不修改任何逻辑）。
+        """
+        self._current_style = style
+        self._current_variant = variant_id
+
+        if style is None:
+            self.summary_label.setText("当前项目不是通过 Seed 生成，暂无风格参数可展示。")
+            # 清空控件显示
+            for spin in (
+                self.melody_duty_spin,
+                self.melody_a_spin,
+                self.melody_d_spin,
+                self.melody_s_spin,
+                self.melody_r_spin,
+                self.bass_duty_spin,
+                self.bass_a_spin,
+                self.bass_d_spin,
+                self.bass_s_spin,
+                self.bass_r_spin,
+                self.harmony_duty_spin,
+                self.harmony_a_spin,
+                self.harmony_d_spin,
+                self.harmony_s_spin,
+                self.harmony_r_spin,
+                self.drum_scale_spin,
+            ):
+                spin.setValue(0.0)
+            return
+
+        meta = get_style_meta(style)
+        params = get_style_params(style)
+        style_name = self._style_name_map.get(style, style.name)
+
+        # 变体名称/说明
+        variant_name = ""
+        variant_desc = ""
+        try:
+            variants = get_style_variants(style)
+            for v in variants:
+                if v.get("id") == variant_id:
+                    variant_name = v.get("name", "")
+                    variant_desc = v.get("desc", "")
+                    break
+        except Exception:
+            pass
+
+        bpm = getattr(project, "bpm", meta.get("default_bpm", ""))
+        mood = meta.get("mood", "")
+        desc = meta.get("short_desc", "")
+
+        lines = [f"风格：{style_name}"]
+        if variant_name:
+            lines.append(f"变体：{variant_name}")
+        if bpm:
+            lines.append(f"BPM：{int(bpm)}")
+        if mood:
+            lines.append(f"情绪：{mood}")
+        if desc:
+            lines.append(f"说明：{desc}")
+        if variant_desc:
+            lines.append(f"变体说明：{variant_desc}")
+
+        self.summary_label.setText("\n".join(lines))
+
+        # 刷新当前风格下的预设列表
+        self._load_presets_for_style(style)
+
+        self._apply_params_to_controls(params)
+
+    def _set_waveform_combo(self, combo: QComboBox, wf: WaveformType):
+        for i in range(combo.count()):
+            if combo.itemData(i) == wf:
+                combo.setCurrentIndex(i)
+                return
+
+    def _apply_params_to_controls(self, params: StyleParams):
+        # 主旋律控件
+        self._set_waveform_combo(self.melody_wave_combo, params.melody_waveform)
+        self.melody_duty_spin.setValue(float(params.melody_duty))
+        self.melody_a_spin.setValue(float(params.melody_adsr.attack))
+        self.melody_d_spin.setValue(float(params.melody_adsr.decay))
+        self.melody_s_spin.setValue(float(params.melody_adsr.sustain))
+        self.melody_r_spin.setValue(float(params.melody_adsr.release))
+
+        # 低音控件
+        self._set_waveform_combo(self.bass_wave_combo, params.bass_waveform)
+        self.bass_duty_spin.setValue(float(params.bass_duty))
+        self.bass_a_spin.setValue(float(params.bass_adsr.attack))
+        self.bass_d_spin.setValue(float(params.bass_adsr.decay))
+        self.bass_s_spin.setValue(float(params.bass_adsr.sustain))
+        self.bass_r_spin.setValue(float(params.bass_adsr.release))
+
+        # 和声控件
+        self._set_waveform_combo(self.harmony_wave_combo, params.harmony_waveform)
+        self.harmony_duty_spin.setValue(float(params.harmony_duty))
+        self.harmony_a_spin.setValue(float(params.harmony_adsr.attack))
+        self.harmony_d_spin.setValue(float(params.harmony_adsr.decay))
+        self.harmony_s_spin.setValue(float(params.harmony_adsr.sustain))
+        self.harmony_r_spin.setValue(float(params.harmony_adsr.release))
+
+        # 鼓点整体
+        self.drum_scale_spin.setValue(float(params.drum_velocity_scale))
+
+    def _collect_params(self) -> StyleParams:
+        """
+        从当前控件中采集出一份 StyleParams，用于覆盖当前风格。
+        """
+        melody_adsr = ADSRParams(
+            attack=float(self.melody_a_spin.value()),
+            decay=float(self.melody_d_spin.value()),
+            sustain=float(self.melody_s_spin.value()),
+            release=float(self.melody_r_spin.value()),
+        )
+        bass_adsr = ADSRParams(
+            attack=float(self.bass_a_spin.value()),
+            decay=float(self.bass_d_spin.value()),
+            sustain=float(self.bass_s_spin.value()),
+            release=float(self.bass_r_spin.value()),
+        )
+        harmony_adsr = ADSRParams(
+            attack=float(self.harmony_a_spin.value()),
+            decay=float(self.harmony_d_spin.value()),
+            sustain=float(self.harmony_s_spin.value()),
+            release=float(self.harmony_r_spin.value()),
+        )
+
+        params = StyleParams(
+            melody_waveform=self.melody_wave_combo.currentData(),
+            melody_duty=float(self.melody_duty_spin.value()),
+            melody_adsr=melody_adsr,
+            bass_waveform=self.bass_wave_combo.currentData(),
+            bass_duty=float(self.bass_duty_spin.value()),
+            bass_adsr=bass_adsr,
+            harmony_waveform=self.harmony_wave_combo.currentData(),
+            harmony_duty=float(self.harmony_duty_spin.value()),
+            harmony_adsr=harmony_adsr,
+            drum_velocity_scale=float(self.drum_scale_spin.value()),
+        )
+        return params
+
+    def apply_to_current_style(self):
+        """
+        将当前面板上的参数应用到当前 Seed 风格：
+        - 通过 set_style_runtime_override 覆盖运行时参数；
+        - 之后再生成 Seed 音乐时，会按照新的音色/ADSR/鼓力度生成。
+        """
+        if self._current_style is None:
+            QMessageBox.information(self, "提示", "请先使用 Seed 生成一段音乐，再调整风格参数。")
+            return
+        params = self._collect_params()
+        try:
+            set_style_runtime_override(self._current_style, params)
+        except Exception as e:
+            QMessageBox.critical(self, "应用失败", f"应用风格参数时出错：{e}")
+            return
+        QMessageBox.information(self, "已应用", "已将当前参数应用到该风格。之后的 Seed 生成将使用这些参数。")
+
+    # ---- 预设相关 ----
+
+    def _preset_settings_key(self, style: SeedMusicStyle) -> str:
+        return f"seed_style_presets/{style.value}"
+
+    def _load_presets_for_style(self, style: SeedMusicStyle):
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.clear()
+        self._current_presets = {}
+        if style is None:
+            self.preset_combo.addItem("（无风格）", None)
+            self.preset_combo.blockSignals(False)
+            return
+        raw = self.settings.value(self._preset_settings_key(style), "", type=str)
+        if raw:
+            try:
+                self._current_presets = json.loads(raw)
+            except Exception:
+                self._current_presets = {}
+        self.preset_combo.addItem("（当前默认参数）", None)
+        for name in self._current_presets.keys():
+            self.preset_combo.addItem(name, name)
+        self.preset_combo.setCurrentIndex(0)
+        self.preset_combo.blockSignals(False)
+
+    def _save_presets_for_style(self, style: SeedMusicStyle):
+        if style is None:
+            return
+        try:
+            raw = json.dumps(self._current_presets)
+        except Exception:
+            return
+        self.settings.setValue(self._preset_settings_key(style), raw)
+
+    def _params_to_dict(self, params: StyleParams) -> dict:
+        return {
+            "melody_waveform": getattr(params.melody_waveform, "name", str(params.melody_waveform)),
+            "melody_duty": float(params.melody_duty),
+            "melody_adsr": {
+                "a": float(params.melody_adsr.attack),
+                "d": float(params.melody_adsr.decay),
+                "s": float(params.melody_adsr.sustain),
+                "r": float(params.melody_adsr.release),
+            },
+            "bass_waveform": getattr(params.bass_waveform, "name", str(params.bass_waveform)),
+            "bass_duty": float(params.bass_duty),
+            "bass_adsr": {
+                "a": float(params.bass_adsr.attack),
+                "d": float(params.bass_adsr.decay),
+                "s": float(params.bass_adsr.sustain),
+                "r": float(params.bass_adsr.release),
+            },
+            "harmony_waveform": getattr(params.harmony_waveform, "name", str(params.harmony_waveform)),
+            "harmony_duty": float(params.harmony_duty),
+            "harmony_adsr": {
+                "a": float(params.harmony_adsr.attack),
+                "d": float(params.harmony_adsr.decay),
+                "s": float(params.harmony_adsr.sustain),
+                "r": float(params.harmony_adsr.release),
+            },
+            "drum_velocity_scale": float(params.drum_velocity_scale),
+        }
+
+    def _params_from_dict(self, data: dict) -> StyleParams:
+        def wf(name: str) -> WaveformType:
+            if not name:
+                return WaveformType.SQUARE
+            return getattr(WaveformType, name, WaveformType.SQUARE)
+
+        melody_adsr = ADSRParams(
+            attack=float(data.get("melody_adsr", {}).get("a", 0.001)),
+            decay=float(data.get("melody_adsr", {}).get("d", 0.05)),
+            sustain=float(data.get("melody_adsr", {}).get("s", 0.8)),
+            release=float(data.get("melody_adsr", {}).get("r", 0.1)),
+        )
+        bass_adsr = ADSRParams(
+            attack=float(data.get("bass_adsr", {}).get("a", 0.001)),
+            decay=float(data.get("bass_adsr", {}).get("d", 0.08)),
+            sustain=float(data.get("bass_adsr", {}).get("s", 0.3)),
+            release=float(data.get("bass_adsr", {}).get("r", 0.1)),
+        )
+        harmony_adsr = ADSRParams(
+            attack=float(data.get("harmony_adsr", {}).get("a", 0.01)),
+            decay=float(data.get("harmony_adsr", {}).get("d", 0.15)),
+            sustain=float(data.get("harmony_adsr", {}).get("s", 0.8)),
+            release=float(data.get("harmony_adsr", {}).get("r", 0.25)),
+        )
+        return StyleParams(
+            melody_waveform=wf(data.get("melody_waveform")),
+            melody_duty=float(data.get("melody_duty", 0.5)),
+            melody_adsr=melody_adsr,
+            bass_waveform=wf(data.get("bass_waveform")),
+            bass_duty=float(data.get("bass_duty", 0.5)),
+            bass_adsr=bass_adsr,
+            harmony_waveform=wf(data.get("harmony_waveform")),
+            harmony_duty=float(data.get("harmony_duty", 0.5)),
+            harmony_adsr=harmony_adsr,
+            drum_velocity_scale=float(data.get("drum_velocity_scale", 1.0)),
+        )
+
+    def save_current_as_preset(self):
+        """将当前控件参数保存为当前风格的一个预设（持久化到 QSettings）"""
+        if self._current_style is None:
+            QMessageBox.information(self, "提示", "请先使用 Seed 生成一段音乐，再保存预设。")
+            return
+        from PyQt5.QtWidgets import QInputDialog
+
+        name, ok = QInputDialog.getText(self, "保存预设", "预设名称：")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        params = self._collect_params()
+        self._current_presets[name] = self._params_to_dict(params)
+        self._save_presets_for_style(self._current_style)
+        # 刷新下拉列表并选中新预设
+        self._load_presets_for_style(self._current_style)
+        index = self.preset_combo.findData(name)
+        if index >= 0:
+            self.preset_combo.setCurrentIndex(index)
+
+        QMessageBox.information(self, "已保存", f"已保存预设「{name}」。")
+
+    def load_selected_preset(self):
+        """从下拉列表中加载选中的预设到控件（不自动应用到运行时覆盖）"""
+        if self._current_style is None:
+            QMessageBox.information(self, "提示", "当前没有可用的 Seed 风格。")
+            return
+        data_key = self.preset_combo.currentData()
+        if data_key is None:
+            # 选中的是“当前默认参数”占位项，则回到默认 StyleParams
+            params = get_style_params(self._current_style)
+            self._apply_params_to_controls(params)
+            return
+        preset_data = self._current_presets.get(data_key)
+        if not preset_data:
+            QMessageBox.warning(self, "提示", "未找到该预设的数据，可能设置已损坏。")
+            return
+        try:
+            params = self._params_from_dict(preset_data)
+        except Exception as e:
+            QMessageBox.critical(self, "加载失败", f"解析预设时出错：\n{e}")
+            return
+        self._apply_params_to_controls(params)
 
 
 class MainWindow(QMainWindow):
@@ -45,6 +593,9 @@ class MainWindow(QMainWindow):
         self.sequencer = Sequencer()
         self.current_file_path = None  # 当前打开的文件路径
         self.current_midi_file_path = None  # 当前导入的MIDI文件路径
+        # 当前 Seed 生成的风格及变体（用于风格参数面板）
+        self.current_seed_style = None
+        self.current_seed_variant = None
         
         # 初始化设置管理器（用于保存/读取设置）
         self.settings = QSettings("8bit", "MusicMaker")
@@ -55,6 +606,9 @@ class MainWindow(QMainWindow):
         self.settings_manager = get_settings_manager()
         # 乐谱片段库
         self.score_library = ScoreLibrary()
+        
+        # 右侧 Dock 面板当前锁定宽度（属性 / 乐谱），在 init_ui 中初始化
+        self._right_dock_width = None
         
         self.init_ui()
         self.setup_menu()
@@ -239,7 +793,7 @@ class MainWindow(QMainWindow):
         
         main_layout.addWidget(track_area, 1)  # 拉伸因子1，占一半
         
-        # ========== 属性 / 乐谱面板：使用浮动窗口（DockWidget）==========
+        # ========== 属性 / 乐谱 / 风格参数面板：使用浮动窗口（DockWidget）==========
         self.property_dock = QDockWidget("属性面板", self)
         self.property_panel = PropertyPanelWidget()
         self.property_dock.setWidget(self.property_panel)
@@ -262,12 +816,46 @@ class MainWindow(QMainWindow):
         self.score_dock.setWidget(self.score_panel)
         self.score_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
         self.addDockWidget(Qt.RightDockWidgetArea, self.score_dock)
+        # 使乐谱面板与属性面板使用相同的宽度策略，避免在切换 Tab 时右侧区域宽度发生跳变
+        self.score_dock.setMinimumWidth(self.property_dock.minimumWidth())
+        self.score_dock.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         # 默认不显示，需要时通过菜单显示
         self.score_dock.setVisible(False)
         self.score_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable | QDockWidget.DockWidgetClosable)
 
-        # 将两个面板在右侧堆叠（类似 Altium 的属性面板/其它面板堆叠效果）
+        # 风格参数面板（Seed 风格参数预览）
+        self.style_dock = QDockWidget("风格参数", self)
+        self.style_params_panel = StyleParamsWidget()
+        self.style_dock.setWidget(self.style_params_panel)
+        self.style_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.style_dock)
+        self.style_dock.setMinimumWidth(self.property_dock.minimumWidth())
+        self.style_dock.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self.style_dock.setVisible(False)
+        self.style_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable | QDockWidget.DockWidgetClosable)
+
+        # 将三个面板在右侧堆叠（类似 Altium 的属性面板/其它面板堆叠效果）
         self.tabifyDockWidget(self.property_dock, self.score_dock)
+        self.tabifyDockWidget(self.property_dock, self.style_dock)
+
+        # 记录并锁定当前右侧面板宽度，避免在属性/乐谱面板之间切换时自动调整宽度。
+        # 注意：这里在 dock 叠放之后再读取宽度，确保是分隔条最终布局后的宽度。
+        self._right_dock_width = self.property_dock.width()
+        if self._right_dock_width <= 0:
+            self._right_dock_width = self.property_dock.minimumWidth()
+        self.property_dock.setMinimumWidth(self._right_dock_width)
+        self.property_dock.setMaximumWidth(self._right_dock_width)
+        self.score_dock.setMinimumWidth(self._right_dock_width)
+        self.score_dock.setMaximumWidth(self._right_dock_width)
+        self.style_dock.setMinimumWidth(self._right_dock_width)
+        self.style_dock.setMaximumWidth(self._right_dock_width)
+
+        # 监听两个 dock 的尺寸变化：当用户手动调整右侧区域宽度时，同步更新锁定宽度，
+        # 使属性/乐谱面板在 Tab 之间切换时宽度保持不变，只在用户拖动时才整体改变。
+        self.property_dock.installEventFilter(self)
+        self.score_dock.installEventFilter(self)
+        self.style_dock.installEventFilter(self)
+
         
         # 连接信号
         self.connect_signals()
@@ -283,6 +871,25 @@ class MainWindow(QMainWindow):
         
         # 初始化显示
         self.refresh_ui()
+
+    def eventFilter(self, obj, event):
+        """
+        统一处理右侧 Dock（属性面板 / 乐谱面板）的宽度锁定逻辑：
+        - 用户拖动右侧分隔条时，Dock 会收到 Resize 事件；
+        - 这里捕获新的宽度，并同步更新两个 Dock 的 min/maxWidth，
+          这样在 Tab 之间切换时就不会自动重新计算大小，右侧区域宽度保持稳定。
+        """
+        tracked_docks = {getattr(self, "property_dock", None), getattr(self, "score_dock", None), getattr(self, "style_dock", None)}
+        if event.type() == QEvent.Resize and obj in tracked_docks:
+            new_width = obj.width()
+            if new_width > 0 and new_width != self._right_dock_width:
+                self._right_dock_width = new_width
+                # 同步锁定右侧所有 Dock 的宽度
+                for dock in tracked_docks:
+                    if dock is not None:
+                        dock.setMinimumWidth(new_width)
+                        dock.setMaximumWidth(new_width)
+        return super().eventFilter(obj, event)
     
     def apply_theme(self):
         """应用主题到所有UI组件"""
@@ -481,6 +1088,7 @@ class MainWindow(QMainWindow):
             self.score_panel.request_create_from_selection.connect(self.on_score_create_from_selection)
             self.score_panel.snippet_apply_requested.connect(self.on_score_apply_snippet)
             self.score_panel.snippet_delete_requested.connect(self.on_score_delete_snippet)
+            self.score_panel.snippet_preview_requested.connect(self.on_score_preview_snippet)
         
         # 序列编辑器选择变化信号
         self.sequence_widget.selection_changed.connect(self.on_selection_changed)
@@ -774,8 +1382,8 @@ class MainWindow(QMainWindow):
             octave = note.pitch // 12 - 1
             note_name = note_names[note.pitch % 12]
             self.statusBar().showMessage(f"已选中音符: {note_name}{octave} (按Delete键删除)")
-        # 自动聚焦属性面板（如果当前显示的是乐谱面板，则切换回属性面板）
-        self._focus_property_panel()
+            # 自动聚焦属性面板（如果当前显示的是乐谱面板，则切换回属性面板）
+            self._focus_property_panel()
     
     def on_note_deleted(self, note, track):
         """音符被删除（单个，通过命令系统）"""
@@ -1227,6 +1835,13 @@ class MainWindow(QMainWindow):
         self.toggle_score_action.setChecked(False)
         self.toggle_score_action.triggered.connect(self.toggle_score_panel)
         view_menu.addAction(self.toggle_score_action)
+
+        # 显示/隐藏风格参数面板
+        self.toggle_style_params_action = QAction("风格参数(&S)", self)
+        self.toggle_style_params_action.setCheckable(True)
+        self.toggle_style_params_action.setChecked(False)
+        self.toggle_style_params_action.triggered.connect(self.toggle_style_params_panel)
+        view_menu.addAction(self.toggle_style_params_action)
         
         # 编辑菜单
         edit_menu = menubar.addMenu("编辑(&E)")
@@ -1271,6 +1886,13 @@ class MainWindow(QMainWindow):
         stop_action.triggered.connect(self.stop)
         play_menu.addAction(stop_action)
         
+        # 生成菜单（用于 V3：Seed 生成音乐等功能）
+        generate_menu = menubar.addMenu("生成(&G)")
+
+        generate_seed_action = QAction("从 Seed 生成音乐(&M)...", self)
+        generate_seed_action.triggered.connect(self.generate_music_from_seed)
+        generate_menu.addAction(generate_seed_action)
+
         # 设置菜单（统一入口）
         settings_menu = menubar.addMenu("设置(&S)")
         
@@ -1319,6 +1941,287 @@ class MainWindow(QMainWindow):
                 self.unified_editor.set_selected_track(None)
             
             self.statusBar().showMessage("已创建新项目")
+
+    def generate_music_from_seed(self):
+        """
+        使用 Seed 生成一段简单的 8bit 音乐（V3 的第一版实现）。
+
+        - 弹出对话框输入 Seed（字符串或数字均可）和大致小节数；
+        - 调用核心的 generate_simple_project_from_seed 生成 Project；
+        - 直接用 Sequencer 加载，并刷新当前 UI。
+        """
+        from PyQt5.QtWidgets import QInputDialog, QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QLabel, QComboBox, QDialogButtonBox
+
+        if not self.check_unsaved_changes():
+            return
+
+        # 自定义对话框：选择风格 + 输入 Seed + 小节数
+        class SeedGenerateDialog(QDialog):
+            def __init__(self, parent=None):
+                super().__init__(parent)
+                self.setWindowTitle("从 Seed 生成音乐")
+                layout = QVBoxLayout(self)
+
+                # 种子（放在最上面）
+                seed_row = QHBoxLayout()
+                seed_label = QLabel("种子：")
+                self.seed_edit = QLineEdit()
+                self.seed_edit.setText("minecraft")
+                seed_row.addWidget(seed_label)
+                seed_row.addWidget(self.seed_edit)
+                layout.addLayout(seed_row)
+
+                # 生成模式（旋律 / 整曲）
+                mode_row = QHBoxLayout()
+                mode_label = QLabel("生成模式：")
+                self.mode_combo = QComboBox()
+                self.mode_combo.addItem("生成旋律", "melody")
+                self.mode_combo.addItem("整曲（含前奏结构）", "full_song")
+                mode_row.addWidget(mode_label)
+                mode_row.addWidget(self.mode_combo)
+                layout.addLayout(mode_row)
+
+                # 小节数
+                bars_row = QHBoxLayout()
+                bars_label = QLabel("小节数（4/4 拍）：")
+                from PyQt5.QtWidgets import QSpinBox
+                self.bars_spin = QSpinBox()
+                self.bars_spin.setRange(4, 64)
+                self.bars_spin.setValue(8)
+                bars_row.addWidget(bars_label)
+                bars_row.addWidget(self.bars_spin)
+                layout.addLayout(bars_row)
+
+                # 轨道内容选择：是否生成和声 / 鼓点
+                track_row = QHBoxLayout()
+                track_label = QLabel("轨道：")
+                self.harmony_checkbox = QCheckBox("和声")
+                self.harmony_checkbox.setChecked(True)
+                self.drum_checkbox = QCheckBox("鼓点")
+                self.drum_checkbox.setChecked(True)
+                track_row.addWidget(track_label)
+                track_row.addWidget(self.harmony_checkbox)
+                track_row.addWidget(self.drum_checkbox)
+                track_row.addStretch(1)
+                layout.addLayout(track_row)
+
+                # 风格选择
+                style_row = QHBoxLayout()
+                style_label = QLabel("风格：")
+                self.style_combo = QComboBox()
+                # 这里的顺序和 SeedMusicStyle 保持一一对应，便于后面映射
+                self.style_combo.addItem("经典 8bit", SeedMusicStyle.CLASSIC_8BIT)
+                self.style_combo.addItem("Lofi", SeedMusicStyle.LOFI)
+                self.style_combo.addItem("战斗 / 紧张", SeedMusicStyle.BATTLE)
+                self.style_combo.addItem("悬疑 / 惊悚", SeedMusicStyle.SUSPENSE)
+                self.style_combo.addItem("舒缓 / 美好", SeedMusicStyle.CALM)
+                style_row.addWidget(style_label)
+                style_row.addWidget(self.style_combo)
+                layout.addLayout(style_row)
+
+                # 风格变体选择（例如：战斗-默认 / 偏旋律 / 偏鼓点；悬疑-默认 / 更紧张 / 更空灵）
+                variant_row = QHBoxLayout()
+                variant_label = QLabel("风格变体：")
+                self.variant_combo = QComboBox()
+                variant_row.addWidget(variant_label)
+                variant_row.addWidget(self.variant_combo)
+                layout.addLayout(variant_row)
+
+                # 结构：Intro / 主循环占比（仅在整曲模式下生效）
+                self.structure_group = QWidget()
+                structure_layout = QVBoxLayout(self.structure_group)
+                structure_layout.setContentsMargins(0, 0, 0, 0)
+
+                intro_row = QHBoxLayout()
+                self.intro_label = QLabel("结构：默认整段主循环")
+                structure_layout.addWidget(self.intro_label)
+
+                slider_row = QHBoxLayout()
+                slider_caption = QLabel("前奏 Intro 占总长度的比例：")
+                self.intro_ratio_slider = QSlider(Qt.Horizontal)
+                self.intro_ratio_slider.setRange(0, 50)  # 0% ~ 50%
+                self.intro_ratio_slider.setValue(25)
+                slider_row.addWidget(slider_caption)
+                slider_row.addWidget(self.intro_ratio_slider)
+                structure_layout.addLayout(slider_row)
+
+                layout.addWidget(self.structure_group)
+
+                # 风格说明（只读），帮助用户快速理解当前风格的大致参数和情绪（放在最下面）
+                self.style_info_label = QLabel()
+                self.style_info_label.setWordWrap(True)
+                # 稍微减小一点字体，使说明文字不会抢占主 UI 视觉
+                font = self.style_info_label.font()
+                font.setPointSize(max(9, font.pointSize() - 1))
+                self.style_info_label.setFont(font)
+                layout.addWidget(self.style_info_label)
+
+                # 按钮
+                button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+                button_box.accepted.connect(self.accept)
+                button_box.rejected.connect(self.reject)
+                layout.addWidget(button_box)
+                # 修改标准按钮文本为“生成 / 取消”，与当前业务更贴合
+                ok_button = button_box.button(QDialogButtonBox.Ok)
+                cancel_button = button_box.button(QDialogButtonBox.Cancel)
+                if ok_button is not None:
+                    ok_button.setText("生成")
+                if cancel_button is not None:
+                    cancel_button.setText("取消")
+
+                # 绑定风格变化事件，实时刷新说明
+                self.style_combo.currentIndexChanged.connect(self._on_style_changed)
+                # 绑定结构相关事件
+                self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+                self.intro_ratio_slider.valueChanged.connect(self._update_intro_label)
+                self.bars_spin.valueChanged.connect(self._update_intro_label)
+                # 初始化一次展示
+                self._on_style_changed(self.style_combo.currentIndex())
+                self._on_mode_changed(self.mode_combo.currentIndex())
+                self._update_intro_label()
+
+            def _on_style_changed(self, index: int):
+                style = self.style_combo.itemData(index)
+                if style is None:
+                    self.style_info_label.setText("")
+                    self.variant_combo.clear()
+                    return
+                try:
+                    meta = get_style_meta(style)
+                except Exception:
+                    self.style_info_label.setText("")
+                    self.variant_combo.clear()
+                    return
+
+                bpm = meta.get("default_bpm", "")
+                mood = meta.get("mood", "")
+                desc = meta.get("short_desc", "")
+                lines = []
+                if bpm:
+                    lines.append(f"默认 BPM：{bpm}")
+                if mood:
+                    lines.append(f"情绪：{mood}")
+                if desc:
+                    lines.append(f"说明：{desc}")
+                self.style_info_label.setText("\n".join(lines))
+
+                # 根据当前风格刷新变体下拉框
+                self.variant_combo.blockSignals(True)
+                self.variant_combo.clear()
+                try:
+                    variants = get_style_variants(style)
+                except Exception:
+                    variants = [{"id": "default", "name": "默认", "desc": ""}]
+
+                for var in variants:
+                    name = var.get("name", "默认")
+                    vid = var.get("id", "default")
+                    vdesc = var.get("desc", "")
+                    # 文本中附带一点简短说明，帮助区分
+                    if vdesc:
+                        text = f"{name} - {vdesc}"
+                    else:
+                        text = name
+                    self.variant_combo.addItem(text, vid)
+                self.variant_combo.blockSignals(False)
+
+            def get_values(self):
+                style = self.style_combo.currentData()
+                seed = self.seed_edit.text().strip()
+                bars = self.bars_spin.value()
+                variant_id = self.variant_combo.currentData()
+                mode = self.mode_combo.currentData()
+                intro_ratio = self.intro_ratio_slider.value() / 100.0
+                use_harmony = self.harmony_checkbox.isChecked()
+                use_drums = self.drum_checkbox.isChecked()
+                return style, variant_id, seed, bars, mode, intro_ratio, use_harmony, use_drums
+
+            def _on_mode_changed(self, index: int):
+                mode = self.mode_combo.itemData(index)
+                # 只有整曲模式下才需要显示结构设置
+                self.structure_group.setVisible(mode == "full_song")
+                self._update_intro_label()
+
+            def _update_intro_label(self, *args):
+                total_bars = max(1, self.bars_spin.value())
+                ratio = self.intro_ratio_slider.value() / 100.0
+                if ratio <= 0.0:
+                    self.intro_label.setText("结构：无前奏，全部为主循环")
+                    return
+                # 最少保证 1 小节前奏，且前奏不超过一半
+                intro_bars = max(1, int(total_bars * ratio))
+                intro_bars = min(intro_bars, total_bars // 2 if total_bars >= 2 else 1)
+                main_bars = max(0, total_bars - intro_bars)
+                self.intro_label.setText(f"结构：前奏 {intro_bars} 小节 + 主循环 {main_bars} 小节")
+
+        dlg = SeedGenerateDialog(self)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        style, variant_id, seed, length_bars, mode, intro_ratio, use_harmony, use_drums = dlg.get_values()
+        if not seed:
+            return
+
+        # 3. 生成项目
+        try:
+            project = generate_simple_project_from_seed(
+                seed,
+                length_bars=length_bars,
+                style=style,
+                variant_id=variant_id or "default",
+                intro_ratio=intro_ratio if mode == "full_song" else 0.0,
+                enable_bass=(mode == "full_song"),
+                enable_harmony=use_harmony,
+                enable_drums=use_drums,
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "生成失败", f"基于 Seed 生成音乐时出错：{e}")
+            return
+
+        # 4. 应用到当前 Sequencer
+        self.sequencer.set_project(project)
+        self.current_file_path = None
+        self.current_midi_file_path = None
+        self.setWindowTitle(f"8bit音乐制作器 - Seed: {seed}")
+        self._update_file_name_display()
+
+        # 同步 UI 中的 BPM（旋钮 / 节拍器 / 网格等）到生成工程的 BPM
+        bpm = float(project.bpm)
+        # 更新 sequencer 与各子组件
+        self.sequencer.set_bpm(bpm)
+        # 更新 BPM 控件的显示，但避免触发 on_bpm_changed 里的逻辑
+        self.bpm_spinbox.blockSignals(True)
+        self.bpm_spinbox.setValue(int(bpm))
+        self.bpm_spinbox.blockSignals(False)
+        self.sequence_widget.set_bpm(bpm)
+        self.unified_editor.set_bpm(bpm)
+        self.property_panel.set_bpm(bpm)
+        self.metronome_widget.set_bpm(bpm)
+        if hasattr(self, 'oscilloscope_widget'):
+            self.oscilloscope_widget.set_bpm(bpm)
+
+        # 停止可能的播放
+        self.stop()
+
+        # 清除属性面板与选中状态
+        self.property_panel.set_track(None)
+        self.property_panel.set_note(None, None)
+        self.property_panel.set_notes([])
+        self.selected_note = None
+        self.selected_track = None
+        if hasattr(self, 'unified_editor'):
+            self.unified_editor.set_selected_track(None)
+
+        # 更新风格参数面板（仅更新内容，不再自动改变窗口布局/大小）
+        self.current_seed_style = style
+        self.current_seed_variant = variant_id or "default"
+        if hasattr(self, "style_params_panel"):
+            self.style_params_panel.set_style(style, self.current_seed_variant, project)
+
+        # 刷新 UI 显示新生成的项目
+        self.sequence_widget.refresh(force_full_refresh=True)
+        self.refresh_ui()
+        self.statusBar().showMessage(f"已基于 Seed “{seed}” 生成一个新的项目")
     
     def open_or_import_file(self):
         """打开或导入文件（根据文件类型自动判断）"""
@@ -2178,6 +3081,12 @@ class MainWindow(QMainWindow):
         if hasattr(self, "toggle_property_action"):
             self.toggle_property_action.setChecked(self.property_dock.isVisible())
 
+    def toggle_style_params_panel(self, visible: bool):
+        """切换风格参数面板的显示/隐藏"""
+        if not hasattr(self, "style_dock"):
+            return
+        self.style_dock.setVisible(visible)
+
     # ---- 乐谱面板相关逻辑 ----
 
     def on_score_create_from_selection(self):
@@ -2376,6 +3285,88 @@ class MainWindow(QMainWindow):
         # 应用后刷新 UI
         self.refresh_ui(preserve_selection=False)
         self.statusBar().showMessage(f"已将乐谱片段“{snippet.get('name', '')}”应用到音轨：{target_track.name}")
+
+    def on_score_preview_snippet(self, snippet_id: str):
+        """试听指定乐谱片段（不改动工程，只播放一次）"""
+        snippet = self.score_library.get_snippet(snippet_id)
+        if not snippet:
+            return
+
+        snippet_type = snippet.get("type")
+        data = snippet.get("data") or {}
+
+        # 暂时停掉当前播放，避免和预览混在一起
+        if self.sequencer.playback_state.is_playing:
+            self.stop()
+
+        bpm = self.sequencer.get_bpm()
+
+        from core.models import Track, TrackType, WaveformType, Note, ADSRParams
+        from core.track_events import DrumType, DrumEvent
+
+        # 构造一个临时轨道，仅用于生成预览音频
+        # Track 数据模型当前没有 waveform 字段，波形是 Note 级别的属性，这里只需要一个 NOTE_TRACK 轨道容器即可。
+        preview_track = Track(name="预览", track_type=TrackType.NOTE_TRACK)
+
+        if snippet_type == "drum":
+            # 将鼓点片段转换为一个临时鼓轨道
+            preview_track.track_type = TrackType.DRUM_TRACK
+            drums = data.get("drums") or []
+            for info in drums:
+                start_beat = float(info.get("offset_beats", 0.0))
+                duration_beats = float(info.get("duration_beats", 1.0))
+                drum_name = info.get("drum_type", "KICK")
+                try:
+                    drum_type = getattr(DrumType, drum_name)
+                except AttributeError:
+                    drum_type = DrumType.KICK
+                velocity = int(info.get("velocity", 100))
+                event = DrumEvent(
+                    drum_type=drum_type,
+                    start_beat=start_beat,
+                    duration_beats=duration_beats,
+                    velocity=velocity,
+                )
+                preview_track.drum_events.append(event)
+        else:
+            # 普通音符片段：构造若干 Note
+            notes = data.get("notes") or []
+            for info in notes:
+                offset = float(info.get("offset", 0.0))
+                duration = float(info.get("duration", 0.5))
+                pitch = int(info.get("pitch", 60))
+                velocity = int(info.get("velocity", 100))
+                waveform_name = info.get("waveform", "SQUARE")
+                try:
+                    waveform = getattr(WaveformType, waveform_name)
+                except AttributeError:
+                    waveform = WaveformType.SQUARE
+                duty = float(info.get("duty_cycle", 0.5))
+                note = Note(
+                    start_time=offset,
+                    duration=duration,
+                    pitch=pitch,
+                    velocity=velocity,
+                    waveform=waveform,
+                    duty_cycle=duty,
+                    adsr=ADSRParams(),
+                )
+                preview_track.notes.append(note)
+
+        # 使用音频引擎直接为单轨道生成音频并播放
+        try:
+            audio = self.sequencer.audio_engine.generate_track_audio(
+                preview_track,
+                start_time=0.0,
+                end_time=None,
+                bpm=bpm,
+                original_bpm=bpm,
+            )
+            self.sequencer.audio_engine.play_audio(audio, loop=False)
+            self.statusBar().showMessage("正在试听乐谱片段")
+        except Exception:
+            # 预览失败不影响主流程
+            pass
 
     def on_score_delete_snippet(self, snippet_id: str):
         """删除指定乐谱片段"""

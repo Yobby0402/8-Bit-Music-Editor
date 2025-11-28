@@ -99,8 +99,8 @@ class OscilloscopeWidget(QWidget):
         # 应用主题
         self.apply_theme()
         
-        # 设置最小尺寸
-        self.setMinimumHeight(400)
+        # 设置最小尺寸（适当降低，允许主窗口整体缩得更小一点）
+        self.setMinimumHeight(260)
         
         # 初始化音轨颜色映射（用于固定每个音轨的颜色）
         self.track_colors = {}

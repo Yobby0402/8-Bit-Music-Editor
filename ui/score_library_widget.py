@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QTreeWidgetItem,
     QMessageBox,
     QInputDialog,
+    QSizePolicy,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 
@@ -35,6 +36,8 @@ class ScoreLibraryWidget(QWidget):
     snippet_apply_requested = pyqtSignal(str)
     # 请求删除指定片段
     snippet_delete_requested = pyqtSignal(str)
+    # 请求预览指定片段（试听）
+    snippet_preview_requested = pyqtSignal(str)
 
     def __init__(self, score_library, parent=None):
         super().__init__(parent)
@@ -47,8 +50,8 @@ class ScoreLibraryWidget(QWidget):
 
     def _init_ui(self):
         layout = QVBoxLayout()
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
         self.setLayout(layout)
 
         # 片段列表
@@ -63,34 +66,54 @@ class ScoreLibraryWidget(QWidget):
 
         # 操作按钮
         btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(6)
 
-        self.btn_create = QPushButton("从当前选择创建片段")
+        # 按钮文字尽量简短（2~3个字），避免在固定宽度 Dock 中被截断，
+        # 详细含义通过 tooltip 提示给用户。
+        self.btn_create = QPushButton("创建片段")
+        self.btn_apply = QPushButton("应用片段")
+        self.btn_delete = QPushButton("删除")
+        self.btn_preview = QPushButton("试听")
+        self.btn_rename = QPushButton("重命名")
+        self.btn_rename_group = QPushButton("改分组")
+
+        # 统一按钮尺寸和拉伸策略
+        buttons = [
+            self.btn_create,
+            self.btn_apply,
+            self.btn_delete,
+            self.btn_preview,
+            self.btn_rename,
+            self.btn_rename_group,
+        ]
+        for btn in buttons:
+            btn.setMinimumHeight(28)
+            btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+            btn_layout.addWidget(btn)
+
+        # 详细说明用 tooltip 提示，避免占用过多横向空间
+        self.btn_create.setToolTip("从当前选择创建一个新的乐谱片段")
+        self.btn_apply.setToolTip("将选中的乐谱片段应用到当前音轨")
+        self.btn_delete.setToolTip("删除选中的乐谱片段")
+        self.btn_preview.setToolTip("试听选中的乐谱片段")
+        self.btn_rename.setToolTip("重命名选中的乐谱片段")
+        self.btn_rename_group.setToolTip("重命名当前分组")
+
+        # 信号连接
         self.btn_create.clicked.connect(self.request_create_from_selection.emit)
-        btn_layout.addWidget(self.btn_create)
-
-        self.btn_apply = QPushButton("应用到当前音轨")
         self.btn_apply.clicked.connect(self._on_apply_clicked)
-        btn_layout.addWidget(self.btn_apply)
-
-        self.btn_delete = QPushButton("删除片段")
         self.btn_delete.clicked.connect(self._on_delete_clicked)
-        btn_layout.addWidget(self.btn_delete)
-
-        self.btn_rename = QPushButton("重命名片段")
         self.btn_rename.clicked.connect(self._on_rename_snippet_clicked)
-        btn_layout.addWidget(self.btn_rename)
-
-        self.btn_rename_group = QPushButton("重命名分组")
         self.btn_rename_group.clicked.connect(self._on_rename_group_clicked)
-        btn_layout.addWidget(self.btn_rename_group)
+        self.btn_preview.clicked.connect(self._on_preview_clicked)
 
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
-        # 应用主题样式
+        # 应用主题样式：使用统一的小按钮风格
         theme = theme_manager.current_theme
         button_style = theme.get_style("button_small")
-        for btn in (self.btn_create, self.btn_apply, self.btn_delete):
+        for btn in buttons:
             btn.setStyleSheet(button_style)
 
     # ---- 列表刷新 ----
@@ -173,6 +196,14 @@ class ScoreLibraryWidget(QWidget):
         )
         if reply == QMessageBox.Yes:
             self.snippet_delete_requested.emit(snippet_id)
+
+    def _on_preview_clicked(self):
+        """试听当前选中的片段"""
+        snippet_id = self._get_selected_snippet_id()
+        if not snippet_id:
+            QMessageBox.information(self, "提示", "请选择一个乐谱片段后再试听。")
+            return
+        self.snippet_preview_requested.emit(snippet_id)
 
     def _on_rename_snippet_clicked(self):
         """重命名当前选中的片段"""

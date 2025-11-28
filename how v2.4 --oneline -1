@@ -1,0 +1,27 @@
+warning: in the working copy of 'ui/grid_sequence_widget.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ui/main_window.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ui/property_panel_widget.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ui/score_library_widget.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '开发进度.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '更新日志.md', LF will be replaced by CRLF the next time Git touches it
+ ...212\237\350\203\275\350\247\204\345\210\222.md" |  653 [31m-------------[m
+ core/audio_engine.py                               |    8 [32m+[m[31m-[m
+ core/waveform_generator.py                         |    9 [32m+[m[31m-[m
+ jianpu_to_json.py                                  |  450 [31m---------[m
+ ui/grid_sequence_widget.py                         |   97 [32m+[m[31m-[m
+ ui/main_window.py                                  | 1007 [32m+++++++++++++++++++[m[31m-[m
+ ui/oscilloscope_widget.py                          |    4 [32m+[m[31m-[m
+ ui/property_panel_widget.py                        |   31 [32m+[m[31m-[m
+ ui/score_library_widget.py                         |   69 [32m+[m[31m-[m
+ ...270\203\345\261\200\345\210\206\346\236\220.md" |  228 [31m-----[m
+ ...274\200\345\217\221\350\277\233\345\272\246.md" |  158 [32m++[m[31m-[m
+ ...233\264\346\226\260\346\227\245\345\277\227.md" |   35 [32m+[m[31m-[m
+ ...236\266\346\236\204\350\256\276\350\256\241.md" |  636 [31m-------------[m
+ ...212\237\350\203\275\350\256\276\350\256\241.md" |  205 [31m----[m
+ ...270\203\345\261\200\350\247\204\345\210\222.md" |  154 [31m---[m
+ ...200\273\350\276\221\345\210\206\346\236\220.md" |  178 [31m----[m
+ ...274\230\345\214\226\346\226\271\346\241\210.md" |  267 [31m------[m
+ ...207\215\346\236\204\345\256\236\347\216\260.md" |   52 [31m-[m
+ ...256\236\347\216\260\350\256\241\345\210\222.md" |   42 [31m-[m
+ ...207\215\346\236\204\346\226\271\346\241\210.md" |   80 [31m--[m
+ 20 files changed, 1302 insertions(+), 3061 deletions(-)
