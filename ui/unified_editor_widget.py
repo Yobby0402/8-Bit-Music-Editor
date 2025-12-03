@@ -51,8 +51,8 @@ class UnifiedEditorWidget(QWidget):
     def init_ui(self):
         """初始化UI"""
         main_layout = QHBoxLayout()
-        main_layout.setContentsMargins(5, 5, 5, 5)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(3, 3, 3, 3)  # 减少边距
+        main_layout.setSpacing(6)  # 减少间距
         self.setLayout(main_layout)
         
         # 设置统一背景色
@@ -60,106 +60,55 @@ class UnifiedEditorWidget(QWidget):
         bg_color = theme.get_color('background')
         self.setStyleSheet(f"background-color: {bg_color};")
         
-        # ========== 左侧：钢琴键盘（60%宽度） ==========
-        
-        piano_container = QWidget()
-        piano_container_layout = QVBoxLayout()
-        piano_container.setLayout(piano_container_layout)
-        piano_container_layout.setContentsMargins(0, 0, 0, 0)
-        piano_container_layout.setSpacing(0)
-        
-        # 钢琴键盘
+        # ========== 左侧：钢琴键盘（由PianoKeyboardWidget内部管理） ==========
         self.piano_keyboard = PianoKeyboardWidget()
         self.piano_keyboard.note_clicked.connect(self.on_piano_note_clicked)
         self.piano_keyboard.pitch_changed.connect(self.on_pitch_changed)
         # 初始化预览参数（使用update_preview_params来设置正确的波形）
         self.update_preview_params()
-        self.piano_keyboard.setMinimumHeight(220)
         
         # 创建休止符按钮
         self.rest_button = MultilineButton("休止符")
-        self.rest_button.setMinimumHeight(32)
-        self.rest_button.setMaximumHeight(32)
-        self.rest_button.setMinimumWidth(80)
+        # 移除最小高度限制，让按钮能够完全填充容器高度
+        self.rest_button.setMinimumHeight(0)
+        # 移除最大高度限制，让按钮可以自由扩展
+        self.rest_button.setMaximumHeight(16777215)  # Qt的最大值，相当于无限制
+        # 设置SizePolicy让按钮可以自由伸缩（水平和垂直都扩展）
+        self.rest_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.rest_button.clicked.connect(self.on_rest_clicked)
         self.piano_keyboard.set_rest_button(self.rest_button)
         
-        piano_container_layout.addWidget(self.piano_keyboard, 1)
+        # 钢琴键盘已经包含左侧布局，直接添加到主布局
+        main_layout.addWidget(self.piano_keyboard, 7)  # 70%宽度
         
-        # 下方：打击乐按钮
-        drum_area = QWidget()
-        drum_area.setMaximumHeight(70)
-        drum_layout = QHBoxLayout()
-        drum_layout.setContentsMargins(5, 5, 5, 5)
-        drum_layout.setSpacing(6)
-        drum_area.setLayout(drum_layout)
-        
-        # 左侧空白，用于居中
-        drum_layout.addStretch()
-        
-        self.drum_buttons = []
-        self.drum_group = QButtonGroup()
-        
-        drum_types = [
-            ("底鼓", DrumType.KICK),
-            ("军鼓", DrumType.SNARE),
-            ("踩镲", DrumType.HIHAT),
-            ("吊镲", DrumType.CRASH),
-        ]
-        
-        for name, drum_type in drum_types:
-            btn = MultilineButton(name)
-            btn.setCheckable(True)
-            btn.setMinimumHeight(36)
-            btn.setMaximumHeight(36)
-            btn.setMinimumWidth(70)
-            btn._drum_type = drum_type
-            # 添加事件过滤器以实现悬停预览
-            btn.installEventFilter(self)
-            btn.clicked.connect(lambda checked, dt=drum_type: self.on_drum_clicked(dt))
-            self.drum_buttons.append(btn)
-            self.drum_group.addButton(btn)
-            drum_layout.addWidget(btn)
-        
-        # 右侧空白，用于居中
-        drum_layout.addStretch()
-        piano_container_layout.addWidget(drum_area)
-        
-        main_layout.addWidget(piano_container, 7)  # 70%宽度
-        
-        # ========== 右侧：所有按钮（30%宽度，使用GridLayout） ==========
+        # ========== 右侧：所有按钮（30%宽度，使用VBoxLayout） ==========
         right_area = QWidget()
-        # 使用20列网格，方便均匀分布按钮
-        right_layout = QGridLayout()
-        right_layout.setSpacing(6)
-        right_layout.setContentsMargins(5, 5, 5, 5)
+        right_layout = QVBoxLayout()
+        right_layout.setSpacing(2)  # 减小行间距，减少空白
+        right_layout.setContentsMargins(3, 3, 3, 3)  # 减小边距
         right_area.setLayout(right_layout)
         
-        # 第一排：波形选择（4个按钮，每个占5列）
-        waveform_row = 0
-        max_cols = 20  # 总共20列
+        # 第一排：波形选择（使用HBoxLayout，自动排列）
+        waveform_row = QHBoxLayout()
+        waveform_row.setSpacing(2)  # 减小按钮间距
         
         self.waveform_buttons = []
         self.waveform_group = QButtonGroup()
         
         # 根据波形表达的感情色彩重新选择主题色
-        # 方波：红色（激情、力量）
-        # 三角波：蓝色（平静、柔和）
-        # 锯齿波：橙色（活力、动感）
-        # 正弦波：绿色（自然、和谐）
         waveform_colors = {
-            WaveformType.SQUARE: "#E74C3C",      # 红色 - 激情、力量
-            WaveformType.TRIANGLE: "#3498DB",    # 蓝色 - 平静、柔和
-            WaveformType.SAWTOOTH: "#F39C12",    # 橙色 - 活力、动感
-            WaveformType.SINE: "#2ECC71",        # 绿色 - 自然、和谐
+            WaveformType.SQUARE: "#E74C3C",      # 红色
+            WaveformType.TRIANGLE: "#3498DB",    # 蓝色
+            WaveformType.SAWTOOTH: "#F39C12",    # 橙色
+            WaveformType.SINE: "#2ECC71",        # 绿色
         }
         
         # 波形图标（Unicode字符）
         waveform_icons = {
-            WaveformType.SQUARE: "▢",      # 方波图标
-            WaveformType.TRIANGLE: "△",    # 三角波图标
-            WaveformType.SAWTOOTH: "◢",    # 锯齿波图标
-            WaveformType.SINE: "~",        # 正弦波图标
+            WaveformType.SQUARE: "▢",
+            WaveformType.TRIANGLE: "△",
+            WaveformType.SAWTOOTH: "◢",
+            WaveformType.SINE: "~",
         }
         
         waveform_options = [
@@ -169,8 +118,6 @@ class UnifiedEditorWidget(QWidget):
             ("正弦波", WaveformType.SINE)
         ]
         
-        cols_per_waveform = max_cols // len(waveform_options)  # 每个按钮占5列
-        
         # 获取基础字体大小（用于自适应）
         from PyQt5.QtWidgets import QApplication
         app = QApplication.instance()
@@ -179,15 +126,14 @@ class UnifiedEditorWidget(QWidget):
         else:
             base_font_size = 11
         
-        for idx, (name, waveform_type) in enumerate(waveform_options):
+        for name, waveform_type in waveform_options:
             btn = MultilineButton(waveform_icons.get(waveform_type, "?"))
             btn.setCheckable(True)
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)  # 水平和垂直都扩展
-            btn.setToolTip(name)  # 添加工具提示显示名称
-            btn._waveform_type = waveform_type  # 存储波形类型，用于快捷键
+            # 设置SizePolicy让按钮可以自由伸缩（水平扩展，垂直由resizeEvent控制）
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            btn.setToolTip(name)
+            btn._waveform_type = waveform_type
             color = waveform_colors.get(waveform_type, "#CCCCCC")
-            # 未选择时只有边框，选择时有背景色
-            # 增大字体大小，确保选中时文字清晰可见
             btn.setStyleSheet(f"""
                 QPushButton {{
                     font-size: {base_font_size + 8}px;
@@ -217,13 +163,27 @@ class UnifiedEditorWidget(QWidget):
             btn.clicked.connect(lambda checked, wt=waveform_type: self.on_waveform_selected(wt))
             self.waveform_buttons.append(btn)
             self.waveform_group.addButton(btn)
-            col_start = idx * cols_per_waveform
-            right_layout.addWidget(btn, waveform_row, col_start, 1, cols_per_waveform)
+            waveform_row.addWidget(btn, 1)  # stretch factor = 1
         
-        # 在setup_shortcuts中更新按钮文本显示快捷键
+        # 为每一行设置stretch factor，让它们平均分配垂直空间
+        waveform_row_widget = QWidget()
+        # 重写resizeEvent来手动设置按钮高度
+        def waveform_resize_event(event):
+            QWidget.resizeEvent(waveform_row_widget, event)
+            height = waveform_row_widget.height()
+            for btn in self.waveform_buttons:
+                btn.setFixedHeight(height)
+        waveform_row_widget.resizeEvent = waveform_resize_event
         
-        # 第二排：插入模式选择（2个按钮，每个占10列）
-        insert_mode_row = 1
+        waveform_row.setContentsMargins(0, 0, 0, 0)
+        waveform_row_widget.setLayout(waveform_row)
+        waveform_row_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        right_layout.addWidget(waveform_row_widget, 1)  # stretch factor = 1
+        
+        # 第二排：插入模式选择（使用HBoxLayout，自动排列）
+        insert_mode_row = QHBoxLayout()
+        insert_mode_row.setSpacing(2)  # 减小按钮间距
+        
         self.insert_mode_buttons = []
         self.insert_mode_group = QButtonGroup()
         
@@ -235,23 +195,37 @@ class UnifiedEditorWidget(QWidget):
         theme = theme_manager.current_theme
         toggle_style = theme.get_style("button_toggle")
         
-        cols_per_insert_mode = max_cols // len(insert_mode_options)  # 每个按钮占10列
-        
-        for idx, (name, mode) in enumerate(insert_mode_options):
+        for name, mode in insert_mode_options:
             btn = QPushButton(name)
             btn.setCheckable(True)
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)  # 水平和垂直都扩展
+            # 设置SizePolicy让按钮可以自由伸缩（水平扩展，垂直由resizeEvent控制）
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
             btn.setStyleSheet(toggle_style)
             if name == "顺序插入":
                 btn.setChecked(True)
             btn.clicked.connect(lambda checked, m=mode: self.on_insert_mode_selected(m))
             self.insert_mode_buttons.append(btn)
             self.insert_mode_group.addButton(btn)
-            col_start = idx * cols_per_insert_mode
-            right_layout.addWidget(btn, insert_mode_row, col_start, 1, cols_per_insert_mode)
+            insert_mode_row.addWidget(btn, 1)  # stretch factor = 1
         
-        # 第三排：节拍长度选择（5个按钮，每个占4列）
-        duration_row = 2
+        insert_mode_row_widget = QWidget()
+        # 重写resizeEvent来手动设置按钮高度
+        def insert_mode_resize_event(event):
+            QWidget.resizeEvent(insert_mode_row_widget, event)
+            height = insert_mode_row_widget.height()
+            for btn in self.insert_mode_buttons:
+                btn.setFixedHeight(height)
+        insert_mode_row_widget.resizeEvent = insert_mode_resize_event
+        
+        insert_mode_row.setContentsMargins(0, 0, 0, 0)
+        insert_mode_row_widget.setLayout(insert_mode_row)
+        insert_mode_row_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        right_layout.addWidget(insert_mode_row_widget, 1)  # stretch factor = 1
+        
+        # 第三排：节拍长度选择（使用HBoxLayout，自动排列）
+        duration_row = QHBoxLayout()
+        duration_row.setSpacing(2)  # 减小按钮间距
+        
         self.duration_buttons = []
         self.duration_group = QButtonGroup()
         
@@ -260,21 +234,80 @@ class UnifiedEditorWidget(QWidget):
             ("2拍", 2.0), ("4拍", 4.0)
         ]
         
-        cols_per_duration = max_cols // len(duration_options)  # 每个按钮占4列
-        
-        for idx, (name, beats) in enumerate(duration_options):
+        for name, beats in duration_options:
             btn = MultilineButton(name)
             btn.setCheckable(True)
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)  # 水平和垂直都扩展
-            btn._duration_beats = beats  # 存储节拍数，用于快捷键
+            # 设置SizePolicy让按钮可以自由伸缩（水平扩展，垂直由resizeEvent控制）
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            btn._duration_beats = beats
             btn.setStyleSheet(toggle_style)
             if name == "1拍":
                 btn.setChecked(True)
             btn.clicked.connect(lambda checked, b=beats: self.on_duration_selected(b))
             self.duration_buttons.append(btn)
             self.duration_group.addButton(btn)
-            col_start = idx * cols_per_duration
-            right_layout.addWidget(btn, duration_row, col_start, 1, cols_per_duration)
+            duration_row.addWidget(btn, 1)  # stretch factor = 1
+        
+        duration_row_widget = QWidget()
+        # 重写resizeEvent来手动设置按钮高度
+        def duration_resize_event(event):
+            QWidget.resizeEvent(duration_row_widget, event)
+            height = duration_row_widget.height()
+            for btn in self.duration_buttons:
+                btn.setFixedHeight(height)
+        duration_row_widget.resizeEvent = duration_resize_event
+        
+        duration_row.setContentsMargins(0, 0, 0, 0)
+        duration_row_widget.setLayout(duration_row)
+        duration_row_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        right_layout.addWidget(duration_row_widget, 1)  # stretch factor = 1
+        
+        # 第四排：打击乐按钮（使用HBoxLayout，自动排列）
+        drum_row = QHBoxLayout()
+        drum_row.setSpacing(2)  # 减小按钮间距
+        
+        self.drum_buttons = []
+        self.drum_group = QButtonGroup()
+        
+        drum_types = [
+            ("底鼓", DrumType.KICK),
+            ("军鼓", DrumType.SNARE),
+            ("踩镲", DrumType.HIHAT),
+            ("吊镲", DrumType.CRASH),
+        ]
+        
+        for name, drum_type in drum_types:
+            btn = MultilineButton(name)
+            btn.setCheckable(True)
+            # 移除最小高度限制，让按钮能够完全填充容器高度
+            btn.setMinimumHeight(0)
+            # 移除最大高度限制，让按钮可以自由扩展
+            btn.setMaximumHeight(16777215)  # Qt的最大值，相当于无限制
+            # 设置SizePolicy让按钮可以自由伸缩
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            btn._drum_type = drum_type
+            # 添加事件过滤器以实现悬停预览
+            btn.installEventFilter(self)
+            btn.clicked.connect(lambda checked, dt=drum_type: self.on_drum_clicked(dt))
+            self.drum_buttons.append(btn)
+            self.drum_group.addButton(btn)
+            drum_row.addWidget(btn, 1)  # stretch factor = 1
+        
+        drum_row_widget = QWidget()
+        # 重写resizeEvent来手动设置按钮高度
+        def drum_resize_event(event):
+            QWidget.resizeEvent(drum_row_widget, event)
+            height = drum_row_widget.height()
+            for btn in self.drum_buttons:
+                btn.setFixedHeight(height)
+        drum_row_widget.resizeEvent = drum_resize_event
+        
+        drum_row.setContentsMargins(0, 0, 0, 0)
+        drum_row_widget.setLayout(drum_row)
+        drum_row_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        right_layout.addWidget(drum_row_widget, 1)  # stretch factor = 1
+        # 移除addStretch()，让所有行平均分配垂直空间
+        
         main_layout.addWidget(right_area, 3)  # 30%宽度
         
         # 应用主题到打击乐按钮和休止符按钮

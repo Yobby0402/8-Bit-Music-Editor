@@ -44,6 +44,7 @@ class AudioEngine:
         self._current_sounds: List[pygame.mixer.Sound] = []
         self._current_channels: List[pygame.mixer.Channel] = []  # 用于实时音量控制
         self._track_channels: dict = {}  # {track_id: Channel} 用于跟踪每个音轨的Channel
+        self._next_channel_index: int = 0  # 下一个可用的Channel索引
         self.master_volume: float = 1.0  # 主音量（0.0-1.0）
     
     def generate_note_audio(
@@ -137,12 +138,12 @@ class AudioEngine:
         if not track.notes:
             return np.array([], dtype=np.float32)
         
-        # 确定时间范围（根据BPM比例调整）
+        # 确定时间范围（不需要乘以bpm_ratio，因为这是目标播放时长）
         if end_time is None:
             max_end = max(note.end_time for note in track.notes)
-            end_time = max_end * bpm_ratio
+            end_time = max_end
         
-        duration = (end_time - start_time) * bpm_ratio
+        duration = end_time - start_time
         if duration <= 0:
             return np.array([], dtype=np.float32)
         
@@ -155,40 +156,39 @@ class AudioEngine:
             if note.pitch == 0:
                 continue
             
-            # 根据BPM比例重新计算时间
-            adjusted_start_time = note.start_time * bpm_ratio
-            adjusted_duration = note.duration * bpm_ratio
-            
-            # 检查音符是否在时间范围内
-            if adjusted_start_time + adjusted_duration <= start_time or adjusted_start_time >= end_time:
+            # 检查音符是否在时间范围内（使用原始时间，不应用bpm_ratio）
+            if note.end_time <= start_time or note.start_time >= end_time:
                 continue
             
-            # 生成音符音频（使用调整后的持续时间）
-            note_audio = self.generate_note_audio(note, track.volume)
-            # 如果持续时间改变了，需要调整音频长度
-            if abs(adjusted_duration - note.duration) > 0.001:
-                # 重新生成音频以匹配新的持续时间
-                from copy import copy
-                adjusted_note = copy(note)
-                adjusted_note.duration = adjusted_duration
-                note_audio = self.generate_note_audio(adjusted_note, track.volume)
+            # 计算音符在音频数组中的位置（相对于start_time）
+            note_start_sample = int((note.start_time - start_time) * self.sample_rate)
+            note_duration_samples = int(note.duration * self.sample_rate)
+            note_end_sample = note_start_sample + note_duration_samples
             
-            # 计算音符在音频数组中的位置（使用调整后的开始时间）
-            note_start_sample = int((adjusted_start_time - start_time) * self.sample_rate)
-            note_end_sample = note_start_sample + len(note_audio)
+            # 生成音符音频
+            note_audio = self.generate_note_audio(note, track.volume)
             
             # 确保不越界
             if note_start_sample < 0:
-                note_audio = note_audio[-note_start_sample:]
-                note_start_sample = 0
+                # 音符在start_time之前开始，截取音频
+                skip_samples = -note_start_sample
+                if skip_samples < len(note_audio):
+                    note_audio = note_audio[skip_samples:]
+                    note_start_sample = 0
+                else:
+                    continue  # 整个音符都在start_time之前
             
             if note_end_sample > num_samples:
+                # 音符超出end_time，截取音频
                 note_audio = note_audio[:num_samples - note_start_sample]
                 note_end_sample = num_samples
             
             # 混合到音频数组
-            if note_start_sample < num_samples and note_end_sample > 0:
-                audio[note_start_sample:note_end_sample] += note_audio
+            if note_start_sample < num_samples and note_end_sample > 0 and len(note_audio) > 0:
+                # 确保note_audio长度匹配
+                actual_length = min(len(note_audio), note_end_sample - note_start_sample)
+                if actual_length > 0:
+                    audio[note_start_sample:note_start_sample + actual_length] += note_audio[:actual_length]
         
         # 应用轨道效果（对整个轨道应用）
         if len(audio) > 0:
@@ -199,6 +199,13 @@ class AudioEngine:
                 tremolo_params=track.tremolo_params,
                 vibrato_params=track.vibrato_params
             )
+            
+            # 对单个音轨进行轻微的归一化，防止单个音轨本身就有削波
+            # 但保留一些动态范围，不完全归一化到1.0
+            max_amplitude = np.max(np.abs(audio))
+            if max_amplitude > 0.95:  # 如果接近削波，进行轻微压缩
+                # 使用软压缩，而不是硬归一化
+                audio = audio * (0.95 / max_amplitude)
         
         return audio
     
@@ -444,6 +451,12 @@ class AudioEngine:
             track_id = id(track)
             # 为每个音轨生成单独的音频（不应用playback_volume_ratios，通过Channel控制）
             track_audio = self.generate_track_audio(track, start_time, end_time, project_bpm, None)
+            # 调试信息
+            audio_max = np.max(np.abs(track_audio)) if len(track_audio) > 0 else 0.0
+            print(f"[DEBUG] generate_track_audio_list - Track: {track.name}, type: {track.track_type}, "
+                  f"audio_len: {len(track_audio)}, max_amplitude: {audio_max:.4f}, "
+                  f"has_notes: {len(track.notes) if hasattr(track, 'notes') else 0}, "
+                  f"has_drums: {len(track.drum_events) if hasattr(track, 'drum_events') else 0}")
             track_audio_list.append((track, track_audio, track_id))
         
         return track_audio_list
@@ -475,20 +488,29 @@ class AudioEngine:
         sound = pygame.sndarray.make_sound(stereo)
         
         # 使用Channel播放，支持实时音量控制
-        channel = pygame.mixer.find_channel(force=True)
-        if channel is None:
-            try:
-                channel = pygame.mixer.Channel(0)
-            except:
+        # 为每个音轨分配不同的Channel索引，确保不会冲突
+        try:
+            channel_index = self._next_channel_index
+            channel = pygame.mixer.Channel(channel_index)
+            self._next_channel_index = (self._next_channel_index + 1) % 32  # 循环使用32个Channel
+            print(f"[DEBUG] prepare_track_audio - allocated channel {channel_index} for track_id {track_id}")
+        except Exception as e:
+            print(f"[DEBUG] prepare_track_audio - failed to allocate channel: {e}")
+            # 回退到find_channel
+            channel = pygame.mixer.find_channel(force=True)
+            if channel is None:
                 return (None, None)
         
         # 设置初始音量
+        # 注意：track.volume已经在音频生成时应用了，所以这里只需要应用volume_ratio和master_volume
         if volume is None:
-            volume = self.master_volume
+            final_volume = self.master_volume
         else:
-            volume = volume * self.master_volume  # 结合主音量
+            # volume已经是volume_ratio了（不包含track.volume）
+            final_volume = volume * self.master_volume  # 结合主音量
         
-        channel.set_volume(volume)
+        channel.set_volume(final_volume)
+        print(f"[DEBUG] prepare_track_audio - track_id: {track_id}, volume: {volume}, final_volume: {final_volume}, master_volume: {self.master_volume}")
         
         # 保存Channel引用
         self._current_channels.append(channel)
@@ -530,12 +552,16 @@ class AudioEngine:
         
         if use_channel:
             # 使用Channel播放，支持实时音量控制
-            channel = pygame.mixer.find_channel(force=True)  # force=True确保总是返回一个Channel
-            if channel is None:
-                # 如果仍然没有可用Channel（理论上不应该发生），尝试获取第一个Channel
-                try:
-                    channel = pygame.mixer.Channel(0)
-                except:
+            # 为每个音轨分配不同的Channel索引
+            try:
+                channel_index = self._next_channel_index
+                channel = pygame.mixer.Channel(channel_index)
+                self._next_channel_index = (self._next_channel_index + 1) % 32
+            except Exception as e:
+                print(f"[DEBUG] play_audio - failed to allocate channel: {e}")
+                # 回退到find_channel
+                channel = pygame.mixer.find_channel(force=True)
+                if channel is None:
                     # 如果还是失败，回退到直接播放
                     use_channel = False
             
@@ -588,16 +614,32 @@ class AudioEngine:
         
         Args:
             track_id: 音轨ID
-            volume_ratio: 播放设置中的音量占比（0.0-1.0）
-            track_volume: 音轨的原始音量（0.0-1.0），默认1.0
+            volume_ratio: 播放设置中的音量占比（0.0-1.0），已经包含了volume_scale
+            track_volume: 音轨的原始音量（0.0-1.0），默认1.0（注意：已经在音频生成时应用）
         """
         if track_id in self._track_channels:
             channel = self._track_channels[track_id]
-            if channel and channel.get_busy():
-                # 最终音量 = track_volume * volume_ratio * master_volume
-                # 注意：track_volume已经在音频生成时应用，但我们需要在实时调整时重新计算
-                final_volume = min(1.0, max(0.0, track_volume * volume_ratio * self.master_volume))
+            if channel:
+                # 如果音量占比为0或非常小，直接设置为0（确保完全静音）
+                if volume_ratio <= 0.001:
+                    final_volume = 0.0
+                else:
+                    # 最终音量 = volume_ratio * master_volume
+                    # 注意：track_volume已经在音频生成时应用了，所以这里不需要再乘以track_volume
+                    # volume_ratio已经包含了volume_scale
+                    final_volume = min(1.0, max(0.0, volume_ratio * self.master_volume))
+                
+                # 无论channel是否busy，都设置音量（确保静音立即生效）
+                # 使用pygame.mixer.Channel.set_volume()来设置音量，0.0表示完全静音
                 channel.set_volume(final_volume)
+                
+                # 如果设置为0，也尝试暂停channel（双重保险）
+                if final_volume <= 0.001:
+                    # 注意：pygame的Channel没有pause方法，但set_volume(0.0)应该足够
+                    # 如果仍然有问题，可以考虑使用channel.stop()，但这会停止播放
+                    pass
+                
+                print(f"[DEBUG] set_track_volume - track_id: {track_id}, volume_ratio: {volume_ratio}, final_volume: {final_volume}, channel_busy: {channel.get_busy()}")
     
     def set_track_enabled(self, track_id: int, enabled: bool) -> None:
         """
@@ -611,15 +653,14 @@ class AudioEngine:
             channel = self._track_channels[track_id]
             if channel:
                 if enabled:
-                    # 如果音轨之前被暂停，恢复播放
-                    if not channel.get_busy():
-                        # 需要重新播放，但这里无法获取原始Sound对象
-                        # 所以禁用/启用需要重新生成音频
-                        pass
-                    channel.set_volume(channel.get_volume())  # 恢复音量
+                    # 恢复播放：需要重新应用音量（从playback_volume_ratios获取）
+                    # 注意：这里不直接恢复音量，而是等待_update_playback_volumes_realtime来设置正确的音量
+                    # 因为音量可能已经改变（用户调整了滑块）
+                    pass
                 else:
-                    # 暂停播放（设置为0音量）
+                    # 禁用音轨：立即设置为0音量（完全静音）
                     channel.set_volume(0.0)
+                    print(f"[DEBUG] set_track_enabled - track_id: {track_id}, enabled: {enabled}, volume set to 0.0")
     
     def set_all_channels_volume(self, volume: float) -> None:
         """
@@ -655,6 +696,7 @@ class AudioEngine:
         self._current_sounds.clear()
         self._current_channels.clear()
         self._track_channels.clear()
+        self._next_channel_index = 0  # 重置Channel索引
     
     def is_playing(self) -> bool:
         """检查是否正在播放"""

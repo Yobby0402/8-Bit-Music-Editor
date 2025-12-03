@@ -24,6 +24,8 @@ class SeedMusicStyle(Enum):
     SUSPENSE = "suspense"           # 悬疑 / 惊悚，阴郁、悬而未决
     CALM = "calm"                   # 舒缓 / 美好，明亮、治愈
     ROCK = "rock"                   # 重金属 / 摇滚，突出鼓点和打击乐
+    DANCE = "dance"                 # 慢摇/舞曲，动感律动，适合跳舞
+    WORKSHOP = "workshop"           # 工作坊 / 专注，Ambient Techno风格，适合工作研发
 
 
 class StyleParams:
@@ -306,6 +308,32 @@ def _build_style_params() -> dict:
             harmony_adsr=ADSRParams(attack=0.005, decay=0.12, sustain=0.75, release=0.2),
             drum_velocity_scale=1.3,  # 鼓点非常突出，力度放大30%
         ),
+        SeedMusicStyle.DANCE: StyleParams(
+            # 舞曲：动感律动，适合跳舞
+            melody_waveform=WaveformType.SQUARE,  # 方波主旋律，清晰明亮
+            melody_duty=0.5,
+            melody_adsr=ADSRParams(attack=0.002, decay=0.08, sustain=0.75, release=0.12),  # 快速起音，保持律动
+            bass_waveform=WaveformType.SQUARE,  # 低音用方波，厚重有力
+            bass_duty=0.5,
+            bass_adsr=ADSRParams(attack=0.001, decay=0.05, sustain=0.9, release=0.1),  # 低音持续，每拍踩点
+            harmony_waveform=WaveformType.SQUARE,  # 和声也用方波，保持统一
+            harmony_duty=0.4,
+            harmony_adsr=ADSRParams(attack=0.01, decay=0.1, sustain=0.7, release=0.2),
+            drum_velocity_scale=1.2,  # 鼓点突出，力度放大20%
+        ),
+        SeedMusicStyle.WORKSHOP: StyleParams(
+            # 工作坊：Ambient Techno风格，平静专注，适合工作研发
+            melody_waveform=WaveformType.SQUARE,  # 方波主旋律，电子感
+            melody_duty=0.45,  # 稍薄，更电子感
+            melody_adsr=ADSRParams(attack=0.01, decay=0.1, sustain=0.8, release=0.2),  # 中等起音，持续稳定
+            bass_waveform=WaveformType.SQUARE,  # 低音用方波，稳定有力
+            bass_duty=0.5,
+            bass_adsr=ADSRParams(attack=0.005, decay=0.08, sustain=0.85, release=0.15),  # 低音持续稳定
+            harmony_waveform=WaveformType.TRIANGLE,  # 和声用三角波，柔和背景
+            harmony_duty=0.5,
+            harmony_adsr=ADSRParams(attack=0.02, decay=0.15, sustain=0.75, release=0.3),  # Pad包络，柔和持续
+            drum_velocity_scale=1.0,  # 鼓点清晰但不激烈
+        ),
     }
 
 
@@ -382,6 +410,16 @@ STYLE_META = {
         "mood": "激烈 / 重金属 / 摇滚",
         "short_desc": "高 BPM、小调为主、主旋律简单重复、低音强烈每拍踩点、鼓点密集强烈（双踩、密集hi-hat），使用锯齿波和方波营造失真感，突出节奏和打击乐。",
     },
+    SeedMusicStyle.DANCE: {
+        "default_bpm": 130,
+        "mood": "动感 / 律动 / House舞曲",
+        "short_desc": "House舞曲风格，BPM 130、大调为主、主旋律简单重复易记、低音每拍踩点厚重有力、鼓点每小节两个'动次打次'（Kick-Snare-Kick-Snare），hi-hat在弱拍，结构：Intro（纯鼓点）→ Verse（基础旋律）→ 主旋律进入，适合跳舞和动感场景。",
+    },
+    SeedMusicStyle.WORKSHOP: {
+        "default_bpm": 108,
+        "mood": "平静 / 专注 / 技术感",
+        "short_desc": "Ambient Techno风格，BPM 108、大调或中性调式、主旋律简单重复不干扰、低音每拍稳定踩点、鼓点清晰但不激烈（Kick每拍，Snare在2、4拍），hi-hat在弱拍，整体平静但有推进感，适合工作、研发、制作装备等专注场景。",
+    },
 }
 
 
@@ -401,6 +439,9 @@ class Classic8bitStyleConfig(MusicStyleConfig):
         return [
             [1, 5, 6, 4],  # I–V–vi–IV
             [1, 4, 5, 1],  # I–IV–V–I
+            [1, 6, 4, 5],  # I–vi–IV–V
+            [1, 5, 1, 4],  # I–V–I–IV
+            [1, 4, 1, 5],  # I–IV–I–V
         ]
     
     def get_melody_motifs(self, rng: random.Random, variant_id: Optional[str] = None) -> List[List[Tuple[int, float]]]:
@@ -409,7 +450,124 @@ class Classic8bitStyleConfig(MusicStyleConfig):
             [(4, 1.0), (2, 1.0), (0, 2.0)],  # 下行回答
             [(0, 0.5), (4, 0.5), (5, 1.0), (4, 1.0), (2, 1.0)],  # 跳进 + 级进
             [(0, 0.5), (1, 0.5), (0, 0.5), (1, 0.5), (2, 2.0)],  # 短音型重复
+            [(0, 0.5), (2, 0.5), (4, 0.5), (2, 0.5), (0, 2.0)],  # 上行-下行
+            [(0, 1.0), (4, 1.0), (0, 2.0)],  # 根音-五度-根音
+            [(2, 0.5), (4, 0.5), (5, 0.5), (4, 0.5), (2, 0.5), (0, 1.5)],  # 级进上行-下行
+            [(0, 0.5), (0, 0.5), (2, 0.5), (2, 0.5), (4, 2.0)],  # 重复音型上行
+            [(4, 0.5), (5, 0.5), (4, 0.5), (2, 0.5), (0, 2.0)],  # 五度-六度-五度-三度-根音
+            [(0, 1.0), (1, 0.5), (2, 0.5), (4, 2.0)],  # 级进上行到五度
         ]
+    
+    def get_bass_pattern(
+        self, 
+        rng: random.Random, 
+        bar_idx: int, 
+        bar_root_degree: int, 
+        root_midi: int, 
+        scale_offsets: List[int],
+        beats_per_bar: float,
+        beat_duration: float,
+        variant_id: Optional[str] = None
+    ) -> List[Tuple[float, float, int]]:
+        # 经典8bit：多种低音模式变化
+        if variant_id == "classic_8bit_bass_heavy":
+            # 重低音变体：每拍都有
+            return [
+                (0.0, 0.5, 110),
+                (1.0, 0.5, 100),
+                (2.0, 0.5, 110),
+                (3.0, 0.5, 100),
+            ]
+        elif variant_id == "classic_8bit_bass_simple":
+            # 简单变体：只在强拍
+            return [(0.0, 2.0, 100), (2.0, 2.0, 100)]
+        else:
+            # 默认：根据小节位置变化
+            if bar_idx % 2 == 0:
+                # 偶数小节：根音-五度交替
+                fifth_degree = (bar_root_degree + 4) % len(scale_offsets)
+                return [
+                    (0.0, 2.0, 100),  # 根音
+                    (2.0, 2.0, 100),  # 五度
+                ]
+            else:
+                # 奇数小节：根音持续
+                return [(0.0, beats_per_bar, 100)]
+    
+    def generate_drum_pattern(
+        self,
+        rng: random.Random,
+        bar_idx: int,
+        bar_start: float,
+        phrase_role: str,
+        phrase_progress: float,
+        is_phrase_end: bool,
+        beats_per_bar: float,
+        variant_id: Optional[str] = None,
+        intro_bars: int = 0,
+        quiet_bars: Optional[set] = None
+    ) -> List[DrumEvent]:
+        events = []
+        
+        # Intro部分处理
+        if phrase_role == "intro":
+            half_intro = max(1, intro_bars // 2)
+            if bar_idx < half_intro:
+                return []
+            else:
+                events.append(DrumEvent(
+                    drum_type=DrumType.KICK,
+                    start_beat=bar_start + 0.0,
+                    duration_beats=0.25,
+                    velocity=int(70 * self.style_params.drum_velocity_scale),
+                ))
+                return events
+        
+        # 经典8bit：简单清晰的4/4拍，根据乐句角色调整
+        if phrase_role in ("statement", "question"):
+            # 起/问：标准4/4
+            kick_beats = [0.0, 2.0]
+            snare_beats = [1.0, 3.0]
+        elif phrase_role in ("development", "answer"):
+            # 承/答：稍微加强
+            kick_beats = [0.0, 2.0]
+            snare_beats = [1.0, 3.0]
+        elif phrase_role == "variation":
+            # 转：更密集
+            kick_beats = [0.0, 1.5, 2.0, 3.5]
+            snare_beats = [1.0, 3.0]
+        else:  # resolution
+            # 合：回归标准
+            kick_beats = [0.0, 2.0]
+            snare_beats = [1.0, 3.0]
+        
+        # 底鼓
+        for k in kick_beats:
+            events.append(DrumEvent(
+                drum_type=DrumType.KICK,
+                start_beat=bar_start + k,
+                duration_beats=0.25,
+                velocity=int(100 * self.style_params.drum_velocity_scale),
+            ))
+        
+        # 军鼓
+        for s in snare_beats:
+            events.append(DrumEvent(
+                drum_type=DrumType.SNARE,
+                start_beat=bar_start + s,
+                duration_beats=0.25,
+                velocity=int(100 * self.style_params.drum_velocity_scale),
+            ))
+        
+        return events
+    
+    def get_track_volumes(self, variant_id: Optional[str] = None) -> Dict[str, float]:
+        if variant_id == "classic_8bit_bass_heavy":
+            return {"melody": 0.9, "bass": 1.0, "harmony": 0.7, "drum_boost": 0.0}
+        elif variant_id == "classic_8bit_bass_simple":
+            return {"melody": 1.0, "bass": 0.7, "harmony": 0.7, "drum_boost": 0.0}
+        else:
+            return {"melody": 1.0, "bass": 0.8, "harmony": 0.7, "drum_boost": 0.0}
 
 
 class LofiStyleConfig(MusicStyleConfig):
@@ -426,6 +584,9 @@ class LofiStyleConfig(MusicStyleConfig):
         return [
             [1, 6, 4, 5],  # I–vi–IV–V
             [1, 4, 1, 5],  # I–IV–I–V
+            [1, 6, 2, 5],  # I–vi–ii–V
+            [1, 3, 6, 4],  # I–iii–vi–IV
+            [1, 4, 6, 5],  # I–IV–vi–V
         ]
     
     def get_melody_motifs(self, rng: random.Random, variant_id: Optional[str] = None) -> List[List[Tuple[int, float]]]:
@@ -434,6 +595,12 @@ class LofiStyleConfig(MusicStyleConfig):
             [(0, 1.5), (2, 1.0), (4, 1.5)],  # 更长音值
             [(0, 2.0), (2, 2.0)],  # 简单两音
             [(4, 1.0), (2, 1.5), (0, 1.5)],  # 下行
+            [(0, 1.0), (1, 1.0), (2, 2.0)],  # 级进上行
+            [(0, 2.0), (4, 2.0)],  # 根音-五度
+            [(2, 1.0), (4, 1.0), (5, 1.0), (4, 1.0)],  # 三度-五度-六度-五度
+            [(0, 1.0), (2, 1.5), (0, 1.5)],  # 根音-三度-根音
+            [(4, 1.0), (2, 1.0), (1, 1.0), (0, 1.0)],  # 五度下行级进
+            [(0, 1.5), (4, 1.0), (2, 1.5)],  # 根音-五度-三度
         ]
     
     def get_bass_pattern(
@@ -447,19 +614,85 @@ class LofiStyleConfig(MusicStyleConfig):
         beat_duration: float,
         variant_id: Optional[str] = None
     ) -> List[Tuple[float, float, int]]:
-        # Lofi：更长的低音，偶尔整小节持续
-        if rng.random() < 0.3:
+        # Lofi：更长的低音，多种变化
+        if variant_id == "lofi_slower":
+            # 更慢变体：整小节持续
             return [(0.0, beats_per_bar, 100)]
+        elif variant_id == "lofi_warm":
+            # 温暖变体：根音-五度交替
+            fifth_degree = (bar_root_degree + 4) % len(scale_offsets)
+            return [
+                (0.0, 2.0, 100),
+                (2.0, 2.0, 100),
+            ]
         else:
-            return [(0.0, 2.0, 100), (2.0, 2.0, 100)]
+            # 默认：30%整小节，70%两拍
+            if rng.random() < 0.3:
+                return [(0.0, beats_per_bar, 100)]
+            else:
+                return [(0.0, 2.0, 100), (2.0, 2.0, 100)]
+    
+    def generate_drum_pattern(
+        self,
+        rng: random.Random,
+        bar_idx: int,
+        bar_start: float,
+        phrase_role: str,
+        phrase_progress: float,
+        is_phrase_end: bool,
+        beats_per_bar: float,
+        variant_id: Optional[str] = None,
+        intro_bars: int = 0,
+        quiet_bars: Optional[set] = None
+    ) -> List[DrumEvent]:
+        events = []
+        
+        # Intro部分处理
+        if phrase_role == "intro":
+            if bar_idx < intro_bars:
+                return []
+        
+        # Lofi：轻、稀疏的鼓点，Shuffle节奏感
+        # 只在强拍（1和3拍）有底鼓
+        if rng.random() < 0.8:  # 80%概率有底鼓
+            events.append(DrumEvent(
+                drum_type=DrumType.KICK,
+                start_beat=bar_start + 0.0,
+                duration_beats=0.25,
+                velocity=int(70 * self.style_params.drum_velocity_scale),
+            ))
+        
+        if rng.random() < 0.6:  # 60%概率在第3拍有底鼓
+            events.append(DrumEvent(
+                drum_type=DrumType.KICK,
+                start_beat=bar_start + 2.0,
+                duration_beats=0.25,
+                velocity=int(65 * self.style_params.drum_velocity_scale),
+            ))
+        
+        # 偶尔有军鼓（30%概率）
+        if rng.random() < 0.3:
+            events.append(DrumEvent(
+                drum_type=DrumType.SNARE,
+                start_beat=bar_start + 2.0,
+                duration_beats=0.25,
+                velocity=int(60 * self.style_params.drum_velocity_scale),
+            ))
+        
+        return events
     
     def get_track_volumes(self, variant_id: Optional[str] = None) -> Dict[str, float]:
-        return {
-            "melody": 0.9,
-            "bass": 0.75,
-            "harmony": 0.65,
-            "drum_boost": -0.1,
-        }
+        if variant_id == "lofi_slower":
+            return {"melody": 0.85, "bass": 0.7, "harmony": 0.6, "drum_boost": -0.15}
+        elif variant_id == "lofi_warm":
+            return {"melody": 0.9, "bass": 0.8, "harmony": 0.7, "drum_boost": -0.1}
+        else:
+            return {
+                "melody": 0.9,
+                "bass": 0.75,
+                "harmony": 0.65,
+                "drum_boost": -0.1,
+            }
 
 
 class BattleStyleConfig(MusicStyleConfig):
@@ -477,6 +710,9 @@ class BattleStyleConfig(MusicStyleConfig):
         return [
             [6, 4, 1, 5],  # vi–IV–I–V（更紧张）
             [1, 5, 6, 5],  # I–V–vi–V
+            [1, 4, 6, 5],  # I–IV–vi–V
+            [6, 1, 4, 5],  # vi–I–IV–V
+            [1, 6, 4, 5],  # I–vi–IV–V
         ]
     
     def get_melody_motifs(self, rng: random.Random, variant_id: Optional[str] = None) -> List[List[Tuple[int, float]]]:
@@ -485,6 +721,11 @@ class BattleStyleConfig(MusicStyleConfig):
             [(0, 0.5), (0, 0.5), (2, 1.0), (0, 2.0)],  # 短促重复
             [(0, 0.5), (4, 0.5), (0, 0.5), (4, 0.5), (2, 2.0)],  # 根音-五度快速重复
             [(0, 1.0), (2, 1.0), (4, 2.0)],  # 上行跳进
+            [(0, 0.5), (2, 0.5), (0, 0.5), (2, 0.5), (4, 2.0)],  # 根音-三度快速重复-五度
+            [(4, 0.5), (0, 0.5), (4, 0.5), (0, 0.5), (2, 2.0)],  # 五度-根音快速重复-三度
+            [(0, 0.5), (4, 0.5), (2, 0.5), (0, 0.5), (4, 2.0)],  # 根音-五度-三度-根音-五度
+            [(0, 1.0), (4, 1.0), (0, 2.0)],  # 根音-五度-根音
+            [(2, 0.5), (4, 0.5), (2, 0.5), (0, 0.5), (2, 2.0)],  # 三度-五度-三度-根音-三度
         ]
     
     def get_bass_pattern(
@@ -498,13 +739,29 @@ class BattleStyleConfig(MusicStyleConfig):
         beat_duration: float,
         variant_id: Optional[str] = None
     ) -> List[Tuple[float, float, int]]:
-        # 战斗：每拍都有短促的低音
-        return [
-            (0.0, 0.5, 120),
-            (1.0, 0.5, 120),
-            (2.0, 0.5, 120),
-            (3.0, 0.5, 120),
-        ]
+        # 战斗：根据乐句角色调整低音密度
+        if variant_id == "battle_melody":
+            # 偏旋律：低音稍微稀疏
+            return [
+                (0.0, 0.5, 110),
+                (2.0, 0.5, 110),
+            ]
+        elif variant_id == "battle_drums":
+            # 偏鼓点：低音更密集
+            return [
+                (0.0, 0.5, 125),
+                (1.0, 0.5, 120),
+                (2.0, 0.5, 125),
+                (3.0, 0.5, 120),
+            ]
+        else:
+            # 默认：每拍都有短促的低音
+            return [
+                (0.0, 0.5, 120),
+                (1.0, 0.5, 120),
+                (2.0, 0.5, 120),
+                (3.0, 0.5, 120),
+            ]
     
     def generate_drum_pattern(
         self,
@@ -612,6 +869,9 @@ class SuspenseStyleConfig(MusicStyleConfig):
         return [
             [6, 2, 5, 1],  # vi–ii–V–I
             [1, 2, 6, 5],  # I–ii–vi–V
+            [1, 6, 2, 5],  # I–vi–ii–V
+            [6, 1, 2, 5],  # vi–I–ii–V
+            [2, 6, 1, 5],  # ii–vi–I–V
         ]
     
     def get_melody_motifs(self, rng: random.Random, variant_id: Optional[str] = None) -> List[List[Tuple[int, float]]]:
@@ -625,6 +885,16 @@ class SuspenseStyleConfig(MusicStyleConfig):
              (0, 1.0), (2, 1.0)],
             # 由高向下的阴郁走向
             [(2, 1.0), (0, 0.5), (1, 0.5), (0, 1.0), (-2, 1.0)],
+            # 半音抖动上行
+            [(0, 0.5), (1, 0.5), (2, 0.5), (1, 0.5), (0, 2.0)],
+            # 突然跳进下行
+            [(2, 0.5), (0, 1.0), (-1, 0.5), (0, 2.0)],
+            # 长音悬挂
+            [(0, 1.0), (1, 0.5), (0, 2.5)],
+            # 半音抖动下行
+            [(2, 0.5), (1, 0.5), (0, 0.5), (-1, 0.5), (0, 2.0)],
+            # 快速抖动后长音
+            [(0, 0.5), (1, 0.5), (0, 0.5), (-1, 0.5), (0, 2.0)],
         ]
     
     def get_bass_pattern(
@@ -638,8 +908,30 @@ class SuspenseStyleConfig(MusicStyleConfig):
         beat_duration: float,
         variant_id: Optional[str] = None
     ) -> List[Tuple[float, float, int]]:
-        # 悬疑：偏重 1、3 拍，但时值较短
-        return [(0.0, 1.0, 100), (2.0, 1.0, 100)]
+        # 悬疑：根据变体调整低音模式
+        if variant_id == "suspense_dense":
+            # 更紧张：低音稍微密集一些
+            return [
+                (0.0, 1.0, 100),
+                (2.0, 1.0, 100),
+            ]
+        elif variant_id == "suspense_sparse":
+            # 更空灵：低音更稀疏
+            if rng.random() < 0.5:
+                return [(0.0, 1.0, 90)]
+            else:
+                return []
+        else:
+            # 默认：偏重 1、3 拍，但时值较短
+            # 偶尔使用根音-五度交替增加不稳定性
+            if rng.random() < 0.3:
+                fifth_degree = (bar_root_degree + 4) % len(scale_offsets)
+                return [
+                    (0.0, 1.0, 100),
+                    (2.0, 1.0, 95),
+                ]
+            else:
+                return [(0.0, 1.0, 100), (2.0, 1.0, 100)]
     
     def get_harmony_chord_degrees(
         self,
@@ -702,6 +994,9 @@ class CalmStyleConfig(MusicStyleConfig):
         return [
             [1, 4, 1, 5],  # I–IV–I–V
             [1, 4, 5, 1],  # I–IV–V–I
+            [1, 6, 4, 5],  # I–vi–IV–V
+            [1, 3, 6, 4],  # I–iii–vi–IV
+            [1, 4, 6, 5],  # I–IV–vi–V
         ]
     
     def get_melody_motifs(self, rng: random.Random, variant_id: Optional[str] = None) -> List[List[Tuple[int, float]]]:
@@ -710,6 +1005,12 @@ class CalmStyleConfig(MusicStyleConfig):
             [(0, 2.0), (2, 2.0)],  # I → Ⅲ，整小节两音
             [(0, 1.0), (1, 1.0), (2, 2.0)],  # 1-2-3，级进上行
             [(2, 2.0), (0, 2.0)],  # Ⅲ → I
+            [(0, 1.0), (2, 1.0), (4, 2.0)],  # 级进上行到五度
+            [(0, 2.0), (4, 2.0)],  # 根音-五度
+            [(2, 1.0), (4, 1.0), (5, 1.0), (4, 1.0)],  # 三度-五度-六度-五度
+            [(0, 1.5), (2, 1.0), (0, 1.5)],  # 根音-三度-根音
+            [(4, 1.0), (2, 1.0), (1, 1.0), (0, 1.0)],  # 五度下行级进
+            [(0, 1.0), (1, 1.0), (2, 1.0), (4, 1.0)],  # 级进上行
         ]
     
     def get_bass_pattern(
@@ -723,8 +1024,63 @@ class CalmStyleConfig(MusicStyleConfig):
         beat_duration: float,
         variant_id: Optional[str] = None
     ) -> List[Tuple[float, float, int]]:
-        # 舒缓：更长的根音
-        return [(0.0, beats_per_bar, 100)]
+        # 舒缓：根据变体调整低音模式
+        if variant_id == "calm_slower":
+            # 更慢：整小节持续
+            return [(0.0, beats_per_bar, 100)]
+        elif variant_id == "calm_brighter":
+            # 更明亮：偶尔根音-三度交替
+            if rng.random() < 0.3:
+                third_degree = (bar_root_degree + 2) % len(scale_offsets)
+                return [
+                    (0.0, 2.0, 100),
+                    (2.0, 2.0, 95),
+                ]
+            else:
+                return [(0.0, beats_per_bar, 100)]
+        else:
+            # 默认：更长的根音
+            return [(0.0, beats_per_bar, 100)]
+    
+    def generate_drum_pattern(
+        self,
+        rng: random.Random,
+        bar_idx: int,
+        bar_start: float,
+        phrase_role: str,
+        phrase_progress: float,
+        is_phrase_end: bool,
+        beats_per_bar: float,
+        variant_id: Optional[str] = None,
+        intro_bars: int = 0,
+        quiet_bars: Optional[set] = None
+    ) -> List[DrumEvent]:
+        events = []
+        
+        # Intro部分处理
+        if phrase_role == "intro":
+            if bar_idx < intro_bars:
+                return []
+        
+        # 舒缓：非常轻、简单的鼓点
+        # 只在强拍（1拍）有底鼓，30%概率
+        if rng.random() < 0.3:
+            events.append(DrumEvent(
+                drum_type=DrumType.KICK,
+                start_beat=bar_start + 0.0,
+                duration_beats=0.25,
+                velocity=int(50 * self.style_params.drum_velocity_scale),
+            ))
+        
+        return events
+    
+    def get_track_volumes(self, variant_id: Optional[str] = None) -> Dict[str, float]:
+        if variant_id == "calm_slower":
+            return {"melody": 0.85, "bass": 0.75, "harmony": 0.55, "drum_boost": -0.15}
+        elif variant_id == "calm_brighter":
+            return {"melody": 0.95, "bass": 0.85, "harmony": 0.65, "drum_boost": -0.1}
+        else:
+            return {"melody": 0.9, "bass": 0.8, "harmony": 0.6, "drum_boost": -0.1}
     
     def get_track_volumes(self, variant_id: Optional[str] = None) -> Dict[str, float]:
         return {"melody": 0.9, "bass": 0.8, "harmony": 0.6, "drum_boost": -0.1}
@@ -757,6 +1113,10 @@ class RockStyleConfig(MusicStyleConfig):
             [(0, 0.5), (0, 0.5), (2, 1.0), (0, 2.0)],  # 短促重复
             [(0, 1.0), (2, 1.0), (4, 2.0)],  # 上行跳进
             [(0, 1.0), (1, 1.0), (2, 2.0)],  # 简单级进
+            [(0, 0.5), (4, 0.5), (0, 0.5), (4, 0.5), (0, 2.0)],  # 根音-五度快速重复
+            [(4, 1.0), (0, 1.0), (4, 2.0)],  # 五度-根音-五度
+            [(0, 1.0), (2, 0.5), (4, 0.5), (2, 2.0)],  # 根音-三度-五度-三度
+            [(0, 0.5), (2, 0.5), (0, 0.5), (2, 0.5), (4, 2.0)],  # 根音-三度快速重复-五度
         ]
     
     def get_bass_pattern(
@@ -770,11 +1130,23 @@ class RockStyleConfig(MusicStyleConfig):
         beat_duration: float,
         variant_id: Optional[str] = None
     ) -> List[Tuple[float, float, int]]:
-        # 摇滚：低音更连贯，使用长持续音
-        if rng.random() < 0.3:
-            return [(0.0, beats_per_bar, 100)]  # 30%概率：整个小节一个长音
+        # 摇滚：根据乐句角色调整低音模式
+        # 在variation阶段（Solo），低音会简化（在主生成逻辑中处理）
+        # 这里处理正常部分
+        if variant_id == "rock_heavier":
+            # 更重：每拍都有低音
+            return [
+                (0.0, 1.0, 110),
+                (1.0, 1.0, 105),
+                (2.0, 1.0, 110),
+                (3.0, 1.0, 105),
+            ]
         else:
-            return [(0.0, 2.0, 100), (2.0, 2.0, 100)]  # 70%概率：前2拍和后2拍各一个长音
+            # 默认：低音更连贯，使用长持续音
+            if rng.random() < 0.3:
+                return [(0.0, beats_per_bar, 100)]  # 30%概率：整个小节一个长音
+            else:
+                return [(0.0, 2.0, 100), (2.0, 2.0, 100)]  # 70%概率：前2拍和后2拍各一个长音
     
     def get_harmony_chord_degrees(
         self,
@@ -932,7 +1304,328 @@ class RockStyleConfig(MusicStyleConfig):
         return events
     
     def get_track_volumes(self, variant_id: Optional[str] = None) -> Dict[str, float]:
-        return {"melody": 0.85, "bass": 1.0, "harmony": 0.75, "drum_boost": 0.3}
+        if variant_id == "rock_heavier":
+            return {"melody": 0.8, "bass": 1.1, "harmony": 0.7, "drum_boost": 0.35}
+        else:
+            return {"melody": 0.85, "bass": 1.0, "harmony": 0.75, "drum_boost": 0.3}
+
+
+class WorkshopStyleConfig(MusicStyleConfig):
+    """工作坊/专注风格配置 - Ambient Techno风格"""
+    
+    def get_scale_choices(self, rng: random.Random) -> Tuple[int, str, List[int]]:
+        # 工作坊：大调或中性调式，平静专注
+        scale_choices = [
+            (60, "major", [0, 2, 4, 5, 7, 9, 11, 12]),  # C 大调
+            (65, "major", [0, 2, 4, 5, 7, 9, 11, 12]),  # F 大调
+            (57, "minor", [0, 2, 3, 5, 7, 8, 10, 12]),  # A 小调（中性）
+        ]
+        return rng.choice(scale_choices)
+    
+    def get_chord_progression_templates(self, rng: random.Random) -> List[List[int]]:
+        # 工作坊：简单稳定的和弦进行
+        return [
+            [1, 4, 5, 1],  # I–IV–V–I（稳定循环）
+            [1, 6, 4, 5],  # I–vi–IV–V（柔和）
+            [1, 4, 1, 5],  # I–IV–I–V（简单）
+            [1, 5, 1, 4],  # I–V–I–IV（稳定）
+        ]
+    
+    def get_melody_motifs(self, rng: random.Random, variant_id: Optional[str] = None) -> List[List[Tuple[int, float]]]:
+        # 工作坊：简单重复，不干扰，长音值
+        return [
+            [(0, 2.0), (2, 2.0)],  # 根音-三度，长音
+            [(0, 1.0), (2, 1.0), (4, 2.0)],  # 级进上行到五度
+            [(0, 2.0), (4, 2.0)],  # 根音-五度
+            [(2, 1.0), (4, 1.0), (2, 2.0)],  # 三度-五度-三度
+            [(0, 1.0), (1, 1.0), (2, 2.0)],  # 级进上行
+            [(0, 1.5), (2, 1.0), (0, 1.5)],  # 根音-三度-根音
+            [(4, 1.0), (2, 1.0), (0, 2.0)],  # 五度-三度-根音，下行
+            [(0, 1.0), (4, 1.0), (0, 2.0)],  # 根音-五度-根音
+        ]
+    
+    def get_bass_pattern(
+        self, 
+        rng: random.Random, 
+        bar_idx: int, 
+        bar_root_degree: int, 
+        root_midi: int, 
+        scale_offsets: List[int],
+        beats_per_bar: float,
+        beat_duration: float,
+        variant_id: Optional[str] = None
+    ) -> List[Tuple[float, float, int]]:
+        # 工作坊：每拍稳定踩点，提供推进感
+        return [
+            (0.0, 0.5, 100),  # 第1拍
+            (1.0, 0.5, 95),   # 第2拍，稍轻
+            (2.0, 0.5, 100),  # 第3拍
+            (3.0, 0.5, 95),   # 第4拍，稍轻
+        ]
+    
+    def generate_drum_pattern(
+        self,
+        rng: random.Random,
+        bar_idx: int,
+        bar_start: float,
+        phrase_role: str,
+        phrase_progress: float,
+        is_phrase_end: bool,
+        beats_per_bar: float,
+        variant_id: Optional[str] = None,
+        intro_bars: int = 0,
+        quiet_bars: Optional[set] = None
+    ) -> List[DrumEvent]:
+        events = []
+        
+        # Intro部分处理
+        if phrase_role == "intro":
+            half_intro = max(1, intro_bars // 2)
+            if bar_idx < half_intro:
+                return []  # 完全无鼓
+            else:
+                # 极简的弱底鼓
+                events.append(DrumEvent(
+                    drum_type=DrumType.KICK,
+                    start_beat=bar_start + 0.0,
+                    duration_beats=0.25,
+                    velocity=int(70 * self.style_params.drum_velocity_scale),
+                ))
+                return events
+        
+        # 工作坊：Ambient Techno风格 - Kick每拍，Snare在2、4拍，清晰但不激烈
+        # Kick：每拍都有，提供稳定节奏
+        for k in [0.0, 1.0, 2.0, 3.0]:
+            events.append(DrumEvent(
+                drum_type=DrumType.KICK,
+                start_beat=bar_start + k,
+                duration_beats=0.3,  # 稍短，清晰
+                velocity=int(100 * self.style_params.drum_velocity_scale),  # 清晰但不激烈
+            ))
+        
+        # Snare：在2、4拍，清晰但不重
+        for s in [1.0, 3.0]:
+            events.append(DrumEvent(
+                drum_type=DrumType.SNARE,
+                start_beat=bar_start + s,
+                duration_beats=0.3,
+                velocity=int(95 * self.style_params.drum_velocity_scale),  # 清晰但不重
+            ))
+        
+        # Hi-hat：在弱拍位置（0.5, 1.5, 2.5, 3.5），增加律动感
+        for h in [0.5, 1.5, 2.5, 3.5]:
+            events.append(DrumEvent(
+                drum_type=DrumType.HIHAT,
+                start_beat=bar_start + h,
+                duration_beats=0.25,
+                velocity=int(60 * self.style_params.drum_velocity_scale),  # 轻，作为填充
+            ))
+        
+        return events
+    
+    def get_track_volumes(self, variant_id: Optional[str] = None) -> Dict[str, float]:
+        # 工作坊：鼓点清晰，主旋律和和声适中，不干扰工作
+        return {"melody": 0.8, "bass": 0.85, "harmony": 0.65, "drum_boost": 0.1}
+
+
+class DanceStyleConfig(MusicStyleConfig):
+    """慢摇/舞曲风格配置"""
+    
+    def get_scale_choices(self, rng: random.Random) -> Tuple[int, str, List[int]]:
+        # 舞曲：大调为主，明亮动感
+        scale_choices = [
+            (60, "major", [0, 2, 4, 5, 7, 9, 11, 12]),  # C 大调
+            (65, "major", [0, 2, 4, 5, 7, 9, 11, 12]),  # F 大调
+            (67, "major", [0, 2, 4, 5, 7, 9, 11, 12]),  # G 大调
+            (62, "major", [0, 2, 4, 5, 7, 9, 11, 12]),  # D 大调
+        ]
+        return rng.choice(scale_choices)
+    
+    def get_chord_progression_templates(self, rng: random.Random) -> List[List[int]]:
+        # 舞曲：经典流行和弦进行
+        return [
+            [1, 5, 6, 4],  # I–V–vi–IV（最经典的流行进行）
+            [1, 4, 5, 1],  # I–IV–V–I（经典摇滚进行）
+            [1, 6, 4, 5],  # I–vi–IV–V
+            [6, 4, 1, 5],  # vi–IV–I–V
+        ]
+    
+    def get_melody_motifs(self, rng: random.Random, variant_id: Optional[str] = None) -> List[List[Tuple[int, float]]]:
+        # 舞曲：简单重复、易记的动机
+        return [
+            [(0, 1.0), (2, 1.0), (4, 2.0)],  # 根音-三度-五度，简单上行
+            [(0, 0.5), (0, 0.5), (2, 1.0), (0, 2.0)],  # 短促重复，强调根音
+            [(0, 1.0), (4, 1.0), (2, 1.0), (0, 1.0)],  # 根音-五度-三度-根音，循环
+            [(0, 1.0), (1, 1.0), (2, 2.0)],  # 简单级进上行
+            [(4, 1.0), (2, 1.0), (0, 2.0)],  # 五度-三度-根音，下行
+        ]
+    
+    def get_bass_pattern(
+        self, 
+        rng: random.Random, 
+        bar_idx: int, 
+        bar_root_degree: int, 
+        root_midi: int, 
+        scale_offsets: List[int],
+        beats_per_bar: float,
+        beat_duration: float,
+        variant_id: Optional[str] = None
+    ) -> List[Tuple[float, float, int]]:
+        # 舞曲：低音每拍踩点，厚重有力
+        # 强拍（1和3）更重，弱拍（2和4）稍轻
+        if rng.random() < 0.7:
+            # 70%概率：每拍都有低音
+            return [
+                (0.0, 0.5, 110),  # 第1拍，强拍，力度大
+                (1.0, 0.5, 100),  # 第2拍，弱拍
+                (2.0, 0.5, 110),  # 第3拍，强拍，力度大
+                (3.0, 0.5, 100),  # 第4拍，弱拍
+            ]
+        else:
+            # 30%概率：只在强拍（1和3）
+            return [
+                (0.0, 1.0, 110),  # 第1拍，长音
+                (2.0, 1.0, 110),  # 第3拍，长音
+            ]
+    
+    def get_harmony_chord_degrees(
+        self,
+        rng: random.Random,
+        bar_root_degree: int,
+        bar_idx: int,
+        phrase_role: str,
+        variant_id: Optional[str] = None,
+        scale_offsets: Optional[List[int]] = None
+    ) -> List[int]:
+        # 舞曲：使用三和弦（根音+三度+五度），明亮和谐
+        scale_len = len(scale_offsets) if scale_offsets else 7
+        chord_degrees = [
+            bar_root_degree,  # 根音
+            (bar_root_degree + 2) % scale_len,  # 三度
+            (bar_root_degree + 4) % scale_len,  # 五度
+        ]
+        # 可选：添加八度增加厚度
+        if rng.random() < 0.4:
+            octave_degree = (bar_root_degree + 7) % scale_len
+            if octave_degree < scale_len:
+                chord_degrees.append(octave_degree)
+        return list(dict.fromkeys(chord_degrees))  # 去重
+    
+    def generate_drum_pattern(
+        self,
+        rng: random.Random,
+        bar_idx: int,
+        bar_start: float,
+        phrase_role: str,
+        phrase_progress: float,
+        is_phrase_end: bool,
+        beats_per_bar: float,
+        variant_id: Optional[str] = None,
+        intro_bars: int = 0,
+        quiet_bars: Optional[set] = None
+    ) -> List[DrumEvent]:
+        events = []
+        
+        # Intro部分：纯鼓点开头（1-2小节）- House风格"动次打次"模式（每小节两个循环）
+        if phrase_role == "intro":
+            if bar_idx < min(2, intro_bars):
+                # 前1-2小节：House风格，每小节两个"动次打次"
+                # 第一个"动次打次"：Kick(1拍) - Snare(2拍)
+                events.append(DrumEvent(
+                    drum_type=DrumType.KICK,
+                    start_beat=bar_start + 0.0,
+                    duration_beats=0.4,  # 稍短，更紧凑
+                    velocity=int(150 * self.style_params.drum_velocity_scale),  # 非常重
+                ))
+                events.append(DrumEvent(
+                    drum_type=DrumType.SNARE,
+                    start_beat=bar_start + 1.0,
+                    duration_beats=0.4,
+                    velocity=int(145 * self.style_params.drum_velocity_scale),  # 非常重
+                ))
+                # 第二个"动次打次"：Kick(3拍) - Snare(4拍)
+                events.append(DrumEvent(
+                    drum_type=DrumType.KICK,
+                    start_beat=bar_start + 2.0,
+                    duration_beats=0.4,
+                    velocity=int(150 * self.style_params.drum_velocity_scale),  # 非常重
+                ))
+                events.append(DrumEvent(
+                    drum_type=DrumType.SNARE,
+                    start_beat=bar_start + 3.0,
+                    duration_beats=0.4,
+                    velocity=int(145 * self.style_params.drum_velocity_scale),  # 非常重
+                ))
+                # Hi-hat在弱拍位置（0.5, 1.5, 2.5, 3.5）
+                for h in [0.5, 1.5, 2.5, 3.5]:
+                    events.append(DrumEvent(
+                        drum_type=DrumType.HIHAT,
+                        start_beat=bar_start + h,
+                        duration_beats=0.25,
+                        velocity=int(70 * self.style_params.drum_velocity_scale),
+                    ))
+                return events
+        
+        # 正常部分：House风格 - 每小节两个"动次打次"（Kick-Snare-Kick-Snare）
+        # 第一个"动次打次"：Kick(1拍) - Snare(2拍)
+        events.append(DrumEvent(
+            drum_type=DrumType.KICK,
+            start_beat=bar_start + 0.0,
+            duration_beats=0.4,  # 稍短，更紧凑有力
+            velocity=int(155 * self.style_params.drum_velocity_scale),  # 非常重，突出"动"
+        ))
+        events.append(DrumEvent(
+            drum_type=DrumType.SNARE,
+            start_beat=bar_start + 1.0,
+            duration_beats=0.4,
+            velocity=int(150 * self.style_params.drum_velocity_scale),  # 非常重，突出"打"
+        ))
+        
+        # 第二个"动次打次"：Kick(3拍) - Snare(4拍)
+        events.append(DrumEvent(
+            drum_type=DrumType.KICK,
+            start_beat=bar_start + 2.0,
+            duration_beats=0.4,
+            velocity=int(155 * self.style_params.drum_velocity_scale),  # 非常重，突出"动"
+        ))
+        events.append(DrumEvent(
+            drum_type=DrumType.SNARE,
+            start_beat=bar_start + 3.0,
+            duration_beats=0.4,
+            velocity=int(150 * self.style_params.drum_velocity_scale),  # 非常重，突出"打"
+        ))
+        
+        # House风格：Hi-hat在弱拍位置，增加律动感
+        # 在每拍的弱拍位置（0.5, 1.5, 2.5, 3.5）添加Hi-hat
+        for h in [0.5, 1.5, 2.5, 3.5]:
+            events.append(DrumEvent(
+                drum_type=DrumType.HIHAT,
+                start_beat=bar_start + h,
+                duration_beats=0.25,
+                velocity=int(70 * self.style_params.drum_velocity_scale),  # 保持清晰
+            ))
+        
+        # 根据乐句角色，可以添加更多Hi-hat增强律动感
+        if phrase_role in ("development", "variation"):
+            # 发展/变化阶段：在每拍的更细分位置添加额外的Hi-hat（十六分音符）
+            for h in [0.25, 0.75, 1.25, 1.75, 2.25, 2.75, 3.25, 3.75]:
+                events.append(DrumEvent(
+                    drum_type=DrumType.HIHAT,
+                    start_beat=bar_start + h,
+                    duration_beats=0.25,
+                    velocity=int(65 * self.style_params.drum_velocity_scale),  # 稍轻，作为填充
+                ))
+        
+        return events
+    
+    def get_track_volumes(self, variant_id: Optional[str] = None) -> Dict[str, float]:
+        # 舞曲：鼓点为主，非常突出，主旋律和和声降低以突出鼓点
+        if variant_id == "dance_drums_focus":
+            # 鼓点焦点变体：鼓点更突出，其他轨道更弱
+            return {"melody": 0.65, "bass": 0.9, "harmony": 0.5, "drum_boost": 0.6}
+        else:
+            # 默认：鼓点为主，但保持一定平衡
+            return {"melody": 0.75, "bass": 0.95, "harmony": 0.6, "drum_boost": 0.5}
 
 
 # 风格配置工厂函数
@@ -952,6 +1645,10 @@ def get_style_config(style: SeedMusicStyle) -> MusicStyleConfig:
         return CalmStyleConfig(style, style_params)
     elif style == SeedMusicStyle.ROCK:
         return RockStyleConfig(style, style_params)
+    elif style == SeedMusicStyle.DANCE:
+        return DanceStyleConfig(style, style_params)
+    elif style == SeedMusicStyle.WORKSHOP:
+        return WorkshopStyleConfig(style, style_params)
     else:
         # 默认返回经典8bit
         return Classic8bitStyleConfig(style, style_params)
@@ -969,9 +1666,43 @@ def get_style_meta(style: SeedMusicStyle) -> dict:
 # 风格变体元信息（在基础风格之上做轻量偏移，不改变默认行为）
 # 说明：
 # - id: 内部标识，用于生成逻辑分支（例如 "battle_default" / "battle_melody" / "battle_drums"）
-# - name: 在 UI 中展示的名称（例如 “默认”“偏旋律”“偏鼓点”）
+# - name: 在 UI 中展示的名称（例如 "默认""偏旋律""偏鼓点"）
 # - desc: 简短说明，不影响任何逻辑
 STYLE_VARIANT_META = {
+    SeedMusicStyle.CLASSIC_8BIT: [
+        {
+            "id": "default",
+            "name": "默认",
+            "desc": "经典8bit风格的默认平衡：方波主旋律 + 三角波低音，标准4/4拍。",
+        },
+        {
+            "id": "classic_8bit_bass_heavy",
+            "name": "重低音",
+            "desc": "低音更密集，每拍都有，适合需要强烈节奏感的场景。",
+        },
+        {
+            "id": "classic_8bit_bass_simple",
+            "name": "简单低音",
+            "desc": "低音更简单，只在强拍，突出主旋律。",
+        },
+    ],
+    SeedMusicStyle.LOFI: [
+        {
+            "id": "default",
+            "name": "默认",
+            "desc": "Lofi风格的默认平衡：柔和、连贯，适合背景音乐。",
+        },
+        {
+            "id": "lofi_slower",
+            "name": "更慢",
+            "desc": "节奏更慢，低音整小节持续，更空灵的氛围。",
+        },
+        {
+            "id": "lofi_warm",
+            "name": "更温暖",
+            "desc": "低音使用根音-五度交替，音色更温暖。",
+        },
+    ],
     SeedMusicStyle.BATTLE: [
         {
             "id": "battle_default",
@@ -981,12 +1712,12 @@ STYLE_VARIANT_META = {
         {
             "id": "battle_melody",
             "name": "偏旋律",
-            "desc": "主旋律更响、更扎眼，鼓点略微收一点，适合突出主题旋律的战斗场景。",
+            "desc": "主旋律更响、更扎眼，低音和鼓点略微收一点，适合突出主题旋律的战斗场景。",
         },
         {
             "id": "battle_drums",
             "name": "偏鼓点",
-            "desc": "鼓点更炸、更密，主旋律略微靠后一些，适合节奏感更强的紧张段落。",
+            "desc": "鼓点更炸、更密，低音更密集，主旋律略微靠后一些，适合节奏感更强的紧张段落。",
         },
     ],
     SeedMusicStyle.SUSPENSE: [
@@ -998,12 +1729,53 @@ STYLE_VARIANT_META = {
         {
             "id": "suspense_dense",
             "name": "更紧张",
-            "desc": "主旋律更连续、安静小节更少，适合持续高压的悬疑段落。",
+            "desc": "主旋律更连续、安静小节更少，低音稍微密集，适合持续高压的悬疑段落。",
         },
         {
             "id": "suspense_sparse",
             "name": "更空灵",
-            "desc": "休止和安静小节更多，鼓点也更弱，适合非常压抑、拉长气氛的环境音。",
+            "desc": "休止和安静小节更多，低音更稀疏，鼓点也更弱，适合非常压抑、拉长气氛的环境音。",
+        },
+    ],
+    SeedMusicStyle.CALM: [
+        {
+            "id": "default",
+            "name": "默认",
+            "desc": "舒缓风格的默认平衡：长音、级进，柔和治愈。",
+        },
+        {
+            "id": "calm_slower",
+            "name": "更慢",
+            "desc": "节奏更慢，低音整小节持续，更空灵的氛围。",
+        },
+        {
+            "id": "calm_brighter",
+            "name": "更明亮",
+            "desc": "低音偶尔使用根音-三度交替，音色更明亮。",
+        },
+    ],
+    SeedMusicStyle.ROCK: [
+        {
+            "id": "default",
+            "name": "默认",
+            "desc": "摇滚风格的默认平衡：突出节奏和打击乐，Solo阶段有快速跑动。",
+        },
+        {
+            "id": "rock_heavier",
+            "name": "更重",
+            "desc": "低音更密集，每拍都有，整体更重更激烈。",
+        },
+    ],
+    SeedMusicStyle.DANCE: [
+        {
+            "id": "default",
+            "name": "默认",
+            "desc": "舞曲风格的默认平衡：鼓点为主，非常突出，主旋律和和声适当降低。",
+        },
+        {
+            "id": "dance_drums_focus",
+            "name": "鼓点焦点",
+            "desc": "鼓点极度突出，主旋律和和声进一步降低，适合纯节奏感的舞曲。",
         },
     ],
 }
@@ -1042,21 +1814,6 @@ def get_rng_from_seed(seed: Union[int, str]) -> random.Random:
 
 # 音乐结构预设：定义不同长度对应的乐句结构
 MUSIC_STRUCTURE_PRESETS = {
-    4: {
-        "name": "单乐句",
-        "phrases": [4],  # 1 个 4 小节乐句
-        "pattern": "simple_repeat",  # 简单重复
-    },
-    8: {
-        "name": "问-答",
-        "phrases": [4, 4],  # 2 个 4 小节乐句
-        "pattern": "question_answer",  # 问句-答句
-    },
-    12: {
-        "name": "起-承-转",
-        "phrases": [4, 4, 4],  # 3 个 4 小节乐句
-        "pattern": "statement_development_variation",
-    },
     16: {
         "name": "起-承-转-合",
         "phrases": [4, 4, 4, 4],  # 4 个 4 小节乐句
@@ -1071,6 +1828,36 @@ MUSIC_STRUCTURE_PRESETS = {
         "name": "完整段落",
         "phrases": [4, 4, 4, 4, 4, 4, 4, 4],  # 8 个 4 小节乐句
         "pattern": "full_paragraph",
+    },
+    48: {
+        "name": "短曲（Intro-Verse-Chorus）",
+        "phrases": [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],  # 12 个 4 小节乐句
+        "pattern": "short_song",  # Intro + Verse + Chorus 结构
+    },
+    64: {
+        "name": "中曲（Intro-Verse-Chorus-Verse-Chorus）",
+        "phrases": [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],  # 16 个 4 小节乐句
+        "pattern": "medium_song",  # Intro + Verse + Chorus + Verse + Chorus 结构
+    },
+    80: {
+        "name": "长曲（Intro-Verse-Chorus-Verse-Chorus-Bridge）",
+        "phrases": [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],  # 20 个 4 小节乐句
+        "pattern": "long_song",  # Intro + Verse + Chorus + Verse + Chorus + Bridge 结构
+    },
+    96: {
+        "name": "完整曲（Intro-Verse-Chorus-Verse-Chorus-Bridge-Chorus）",
+        "phrases": [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],  # 24 个 4 小节乐句
+        "pattern": "full_song",  # Intro + Verse + Chorus + Verse + Chorus + Bridge + Chorus 结构
+    },
+    112: {
+        "name": "扩展曲（Intro-Verse-Chorus-Verse-Chorus-Bridge-Chorus-Outro）",
+        "phrases": [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],  # 28 个 4 小节乐句
+        "pattern": "extended_song",  # Intro + Verse + Chorus + Verse + Chorus + Bridge + Chorus + Outro 结构
+    },
+    128: {
+        "name": "完整作品（Intro-Verse-Chorus-Verse-Chorus-Bridge-Chorus-Outro-扩展）",
+        "phrases": [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],  # 32 个 4 小节乐句
+        "pattern": "complete_work",  # 完整的曲子结构，包含所有部分
     },
 }
 
@@ -1119,7 +1906,7 @@ def _pick_with_weights(rng: random.Random, choices: List[Tuple[int, float]]) -> 
 
 def generate_simple_project_from_seed(
     seed: Union[int, str],
-    length_bars: int = 8,
+    length_bars: int = 16,
     style: SeedMusicStyle = SeedMusicStyle.CLASSIC_8BIT,
     variant_id: str = "default",
     enable_bass: bool = True,
@@ -1145,7 +1932,8 @@ def generate_simple_project_from_seed(
     # 使用 STYLE_META 中的默认 BPM，保证 UI 展示与生成逻辑完全一致
     bpm = get_style_meta(style)["default_bpm"]
     beats_per_bar = 4.0  # 4/4 拍
-    length_bars = max(4, min(length_bars, 64))
+    # 长度限制：最小8小节（至少问-答结构），最大128小节（完整曲子）
+    length_bars = max(8, min(length_bars, 128))
     total_beats = length_bars * beats_per_bar
     beat_duration = 60.0 / bpm
 
@@ -1260,6 +2048,19 @@ def generate_simple_project_from_seed(
     
     # 先处理Intro部分（如果有）
     # 摇滚风格：前1-2小节完全只有鼓点，主旋律延迟进入
+    # 舞曲风格：Intro部分纯鼓点，和声先进入，主旋律稍后进入
+    dance_melody_start_bar = 0
+    dance_harmony_start_bar = 0
+    if style == SeedMusicStyle.DANCE and intro_bars >= 1:
+        # 舞曲风格：前1-2小节纯鼓点，和声从第2小节开始，主旋律从第3小节开始
+        dance_drum_only_bars = min(2, intro_bars)  # 最多2小节纯鼓点
+        dance_harmony_start_bar = dance_drum_only_bars  # 和声从第2小节开始（如果有2小节Intro）
+        dance_melody_start_bar = dance_drum_only_bars + 1  # 主旋律从第3小节开始（如果有2小节Intro）
+        # 如果只有1小节Intro，和声从第1小节开始，主旋律从第2小节开始
+        if intro_bars == 1:
+            dance_harmony_start_bar = 0  # 和声从第1小节开始
+            dance_melody_start_bar = 1  # 主旋律从第2小节开始
+    
     if style == SeedMusicStyle.ROCK and intro_bars >= 2:
         # 摇滚风格：前1-2小节纯鼓点，主旋律从第2小节开始（如果有2小节Intro）
         # 或者从第1小节后半段开始（如果只有1小节Intro）
@@ -1306,6 +2107,54 @@ def generate_simple_project_from_seed(
                 
                 duration_beats_for_time = dur_beats
                 duration = max(0.25 * beat_duration, duration_beats_for_time * beat_duration)
+                
+                note = Note(
+                    pitch=pitch,
+                    start_time=start_time,
+                    duration=duration,
+                    velocity=base_velocity,
+                    waveform=style_params.melody_waveform,
+                    duty_cycle=style_params.melody_duty,
+                    adsr=melody_adsr,
+                )
+                melody_track.notes.append(note)
+                beat_in_bar += dur_beats
+    elif style == SeedMusicStyle.DANCE and intro_bars >= 1:
+        # 舞曲风格：前1-2小节纯鼓点，主旋律从第2小节开始
+        # 主旋律延迟进入：从dance_melody_start_bar开始生成Intro旋律
+        for bar_idx in range(dance_melody_start_bar, intro_bars):
+            bar_start = bar_idx * beats_per_bar
+            bar_chord_degree = bars_progression[bar_idx]
+            bar_root_degree = chord_root_degree(bar_chord_degree)
+            
+            # Intro部分：使用简单的动机，不参与乐句结构
+            motif = rng.choice(motifs)
+            beat_in_bar = 0.0
+            for rel_degree, dur_beats in motif:
+                if beat_in_bar >= beats_per_bar - 1e-6:
+                    break
+                if beat_in_bar + dur_beats > beats_per_bar:
+                    dur_beats = beats_per_bar - beat_in_bar
+                
+                global_beat = bar_start + beat_in_bar
+                is_strong_beat = abs(beat_in_bar - 0.0) < 1e-6 or abs(beat_in_bar - 2.0) < 1e-6
+                
+                if is_strong_beat:
+                    chord_tones = [0, 2, 4]
+                    base_degree = bar_root_degree + rng.choice(chord_tones)
+                else:
+                    base_degree = bar_root_degree + rel_degree
+                
+                degree_clamped = max(0, min(base_degree, len(scale_offsets) - 1))
+                pitch = root_midi + scale_offsets[degree_clamped]
+                pitch = max(60, min(84, pitch))  # 限制在C4-C6范围
+                
+                start_time = global_beat * beat_duration
+                duration = dur_beats * beat_duration
+                
+                # 舞曲：Intro部分主旋律逐渐增强
+                progress = (bar_idx - dance_melody_start_bar) / max(1, intro_bars - dance_melody_start_bar)
+                base_velocity = int(85 * (0.6 + 0.4 * progress))  # 从60%逐渐增强到100%
                 
                 note = Note(
                     pitch=pitch,
@@ -1366,7 +2215,12 @@ def generate_simple_project_from_seed(
                 beat_in_bar += dur_beats
     
     # 处理主旋律部分（带乐句结构）
-    for bar_idx in range(intro_bars, length_bars):
+    # 舞曲风格：主旋律从dance_melody_start_bar开始（如果dance_melody_start_bar > intro_bars）
+    melody_start_bar = intro_bars
+    if style == SeedMusicStyle.DANCE and dance_melody_start_bar > intro_bars:
+        melody_start_bar = dance_melody_start_bar
+    
+    for bar_idx in range(melody_start_bar, length_bars):
         bar_start = bar_idx * beats_per_bar
         bar_chord_degree = bars_progression[bar_idx]
         bar_root_degree = chord_root_degree(bar_chord_degree)
@@ -1971,14 +2825,26 @@ def generate_simple_project_from_seed(
                 variant_id, scale_offsets
             )
 
+            # 舞曲风格：和声延迟进入
+            if style == SeedMusicStyle.DANCE and bar_idx < dance_harmony_start_bar:
+                # 在和声进入之前，不生成和声
+                continue
+            
             # 获取当前小节的乐句信息，用于调整和声密度
             # 注意：和声生成循环的是整个length_bars，包括intro部分
             # 对于intro部分，使用稀疏和声；对于main部分，根据乐句角色调整
             is_solo_section = False  # 初始化变量，避免未定义错误
             if bar_idx < intro_bars:
-                # Intro部分：稀疏和声，只在前2拍
-                harmony_beats = [0.0]
-                harmony_duration_beats = 2.0
+                # Intro部分：舞曲风格使用重复的轻和声
+                if style == SeedMusicStyle.DANCE:
+                    # 舞曲：重复的轻和声，覆盖整个小节，力度较轻
+                    # 使用简单的重复模式：每拍一个和声音符
+                    harmony_beats = [0.0, 1.0, 2.0, 3.0]  # 每拍都有和声，形成重复
+                    harmony_duration_beats = 1.0  # 每个和声音符持续1拍
+                else:
+                    # 其他风格：稀疏和声，只在前2拍
+                    harmony_beats = [0.0]
+                    harmony_duration_beats = 2.0
             else:
                 # Main部分：根据乐句角色调整
                 adjusted_bar_idx = bar_idx - intro_bars
@@ -1986,7 +2852,11 @@ def generate_simple_project_from_seed(
                 phrase_role = get_phrase_role(phrase_idx, len(phrase_lengths))
                 
                 # 根据乐句角色决定和声覆盖范围
-                if phrase_role == "statement":
+                if style == SeedMusicStyle.DANCE:
+                    # 舞曲：重复的轻和声，每拍都有，形成重复模式
+                    harmony_beats = [0.0, 1.0, 2.0, 3.0]  # 每拍都有和声
+                    harmony_duration_beats = 1.0  # 每个和声音符持续1拍，形成重复
+                elif phrase_role == "statement":
                     # 起：稀疏，只在前2拍
                     harmony_beats = [0.0]
                     harmony_duration_beats = 2.0
@@ -2033,11 +2903,18 @@ def generate_simple_project_from_seed(
                 start_time = (bar_start + harmony_beat) * beat_duration
                 duration = harmony_duration_beats * beat_duration
                 
+                # 舞曲风格：和声力度更轻，作为背景
+                if style == SeedMusicStyle.DANCE:
+                    base_harmony_velocity = 60  # 舞曲和声力度较轻
+                else:
+                    base_harmony_velocity = 80  # 其他风格正常力度
+                
                 for d in chord_degrees:
                     pitch = root_midi - 12 + scale_offsets[d]  # 比旋律低一组
-                    # 悬疑风格下和声音量进一步降低，避免盖过主旋律
-                    harmony_velocity = 80
-                    if style == SeedMusicStyle.SUSPENSE:
+                    # 根据风格调整和声力度
+                    if style == SeedMusicStyle.DANCE:
+                        harmony_velocity = base_harmony_velocity  # 舞曲和声较轻，作为背景
+                    elif style == SeedMusicStyle.SUSPENSE:
                         harmony_velocity = 55
                     elif style == SeedMusicStyle.ROCK:
                         if is_solo_section:
@@ -2046,6 +2923,8 @@ def generate_simple_project_from_seed(
                             harmony_velocity = 90  # 摇滚和声要明显，但不过于突出
                     elif style == SeedMusicStyle.CALM:
                         harmony_velocity = 70
+                    else:
+                        harmony_velocity = 80  # 默认力度
 
                     note = Note(
                         pitch=pitch,
@@ -2120,7 +2999,13 @@ def generate_simple_project_from_seed(
                 drum_track.drum_events.append(event)
 
         # 根据风格 / 变体微调鼓点整体音量
-        if style == SeedMusicStyle.SUSPENSE:
+        if style == SeedMusicStyle.DANCE:
+            base = 1.2  # 舞曲鼓点非常突出，作为主要元素
+            drum_track.volume = max(0.2, min(1.8, base + drum_boost))  # 最高可达1.8
+        elif style == SeedMusicStyle.WORKSHOP:
+            base = 0.95  # 工作坊：鼓点清晰但不激烈
+            drum_track.volume = max(0.2, min(1.3, base + drum_boost))
+        elif style == SeedMusicStyle.SUSPENSE:
             base = 0.6
             drum_track.volume = max(0.2, min(1.2, base + drum_boost))
         elif style == SeedMusicStyle.ROCK:

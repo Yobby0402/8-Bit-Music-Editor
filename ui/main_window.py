@@ -259,6 +259,7 @@ class StyleParamsWidget(QWidget):
             SeedMusicStyle.LOFI: "Lofi",
             SeedMusicStyle.BATTLE: "战斗 / 紧张",
             SeedMusicStyle.SUSPENSE: "悬疑 / 惊悚",
+            SeedMusicStyle.DANCE: "慢摇 / 舞曲",
             SeedMusicStyle.CALM: "舒缓 / 美好",
             SeedMusicStyle.ROCK: "重金属 / 摇滚",
         }
@@ -769,6 +770,7 @@ class MainWindow(QMainWindow):
         self.play_stop_button.setToolTip("播放/停止")
         self.play_stop_button.setCheckable(False)
         self.play_stop_button.setFixedSize(40, 35)
+        self.play_stop_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.play_stop_button.clicked.connect(self.toggle_play_stop)
         playback_control_layout.addWidget(self.play_stop_button)
         
@@ -776,6 +778,7 @@ class MainWindow(QMainWindow):
         self.stop_button.setToolTip("停止")
         self.stop_button.setCheckable(False)
         self.stop_button.setFixedSize(40, 35)
+        self.stop_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.stop_button.clicked.connect(self.stop)
         playback_control_layout.addWidget(self.stop_button)
         
@@ -784,12 +787,14 @@ class MainWindow(QMainWindow):
         # ========== BPM控制 ==========
         bpm_label = QLabel("BPM:")
         bpm_label.setFixedWidth(35)
+        bpm_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         playback_control_layout.addWidget(bpm_label)
         
         self.bpm_spinbox = QSpinBox()
         self.bpm_spinbox.setRange(30, 300)
         self.bpm_spinbox.setValue(120)
         self.bpm_spinbox.setFixedWidth(70)
+        self.bpm_spinbox.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         self.bpm_spinbox.valueChanged.connect(self.on_bpm_changed)
         playback_control_layout.addWidget(self.bpm_spinbox)
         
@@ -799,6 +804,7 @@ class MainWindow(QMainWindow):
         self.file_name_label = QLabel("")
         self.file_name_label.setMinimumWidth(100)
         self.file_name_label.setMaximumWidth(200)
+        self.file_name_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         self.file_name_label.setToolTip("当前打开的文件")
         playback_control_layout.addWidget(self.file_name_label)
         
@@ -807,11 +813,13 @@ class MainWindow(QMainWindow):
         # ========== 视图切换 ==========
         view_label = QLabel("视图:")
         view_label.setFixedWidth(35)
+        view_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         playback_control_layout.addWidget(view_label)
         
         from ui.toggle_switch_widget import ToggleSwitchWidget
         self.view_toggle_switch = ToggleSwitchWidget()
         self.view_toggle_switch.setToolTip("切换视图：左侧=序列，右侧=示波器")
+        self.view_toggle_switch.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         self.view_toggle_switch.position_changed.connect(self.on_view_switch_changed)
         playback_control_layout.addWidget(self.view_toggle_switch)
         
@@ -820,6 +828,7 @@ class MainWindow(QMainWindow):
         # ========== 音量控制 ==========
         volume_label = QLabel("音量:")
         volume_label.setFixedWidth(35)
+        volume_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         playback_control_layout.addWidget(volume_label)
         
         self.volume_slider = QSlider(Qt.Horizontal)
@@ -827,10 +836,12 @@ class MainWindow(QMainWindow):
         self.volume_slider.setValue(100)
         self.volume_slider.valueChanged.connect(self.on_volume_changed)
         self.volume_slider.setFixedWidth(120)
+        self.volume_slider.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         playback_control_layout.addWidget(self.volume_slider)
         
         self.volume_label = QLabel("100%")
         self.volume_label.setFixedWidth(40)
+        self.volume_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         playback_control_layout.addWidget(self.volume_label)
         
         track_area_layout.addWidget(playback_control_area)
@@ -856,6 +867,9 @@ class MainWindow(QMainWindow):
         
         # 连接序列编辑器中的添加音轨按钮
         self.sequence_widget.add_track_button.clicked.connect(self.on_add_track_clicked)
+        
+        # 连接音轨悬停信号，在状态栏显示音轨名称
+        self.sequence_widget.track_hovered.connect(self.on_track_hovered)
         
         main_layout.addWidget(track_area, 1)  # 拉伸因子1，占一半
         
@@ -1515,8 +1529,8 @@ class MainWindow(QMainWindow):
             octave = note.pitch // 12 - 1
             note_name = note_names[note.pitch % 12]
             self.statusBar().showMessage(f"已选中音符: {note_name}{octave} (按Delete键删除)")
-            # 自动聚焦属性面板（如果当前显示的是乐谱面板，则切换回属性面板）
-            self._focus_property_panel()
+        # 自动聚焦属性面板（如果当前显示的是乐谱面板，则切换回属性面板）
+        self._focus_property_panel()
     
     def on_note_deleted(self, note, track):
         """音符被删除（单个，通过命令系统）"""
@@ -1793,6 +1807,11 @@ class MainWindow(QMainWindow):
         
         # 选中该轨道上的所有音符（这可能会触发on_selection_changed，但set_track已经设置了正确的显示）
         self.sequence_widget.select_track_notes(track)
+    
+    def on_track_hovered(self, track: Track):
+        """音轨悬停，在状态栏显示音轨名称"""
+        if track:
+            self.statusBar().showMessage(f"音轨: {track.name}")
         
         # 设置统一编辑器的目标音轨
         self.unified_editor.set_selected_track(track)
@@ -2124,7 +2143,8 @@ class MainWindow(QMainWindow):
                 
                 # 从上次设置恢复（如果存在）
                 last_seed = last_settings.get("seed", "minecraft") if last_settings else "minecraft"
-                last_length_index = last_settings.get("length_index", 1) if last_settings else 1
+                # 默认选择16小节（起-承-转-合），对应索引0
+                last_length_index = last_settings.get("length_index", 0) if last_settings else 0
                 last_style_index = last_settings.get("style_index", 5) if last_settings else 5  # 默认摇滚
                 last_variant_index = last_settings.get("variant_index", 0) if last_settings else 0
                 last_harmony = last_settings.get("harmony", True) if last_settings else True
@@ -2143,19 +2163,26 @@ class MainWindow(QMainWindow):
                 length_row = QHBoxLayout()
                 length_label = QLabel("音乐长度：")
                 self.length_preset_combo = QComboBox()
-                self.length_preset_combo.addItem("4 小节（单乐句）", 4)
-                self.length_preset_combo.addItem("8 小节（2 乐句：问-答）", 8)
-                self.length_preset_combo.addItem("12 小节（3 乐句：起-承-转）", 12)
                 self.length_preset_combo.addItem("16 小节（4 乐句：起-承-转-合）", 16)
                 self.length_preset_combo.addItem("24 小节（6 乐句：扩展段落）", 24)
                 self.length_preset_combo.addItem("32 小节（8 乐句：完整段落）", 32)
-                self.length_preset_combo.setCurrentIndex(last_length_index)  # 恢复上次选择
+                self.length_preset_combo.addItem("48 小节（短曲：Intro-Verse-Chorus）", 48)
+                self.length_preset_combo.addItem("64 小节（中曲：Intro-Verse-Chorus-Verse-Chorus）", 64)
+                self.length_preset_combo.addItem("80 小节（长曲：Intro-Verse-Chorus-Verse-Chorus-Bridge）", 80)
+                self.length_preset_combo.addItem("96 小节（完整曲：Intro-Verse-Chorus-Verse-Chorus-Bridge-Chorus）", 96)
+                self.length_preset_combo.addItem("112 小节（扩展曲：Intro-Verse-Chorus-Verse-Chorus-Bridge-Chorus-Outro）", 112)
+                self.length_preset_combo.addItem("128 小节（完整作品：包含所有部分）", 128)
+                # 默认选择16小节（起-承-转-合），如果上次选择超出范围则使用默认
+                if last_length_index >= 0 and last_length_index < self.length_preset_combo.count():
+                    self.length_preset_combo.setCurrentIndex(last_length_index)
+                else:
+                    self.length_preset_combo.setCurrentIndex(0)  # 16小节
                 length_row.addWidget(length_label)
                 length_row.addWidget(self.length_preset_combo)
                 layout.addLayout(length_row)
 
                 # 结构说明标签
-                self.structure_info_label = QLabel("结构：2 个乐句，每个 4 小节（问句-答句结构）")
+                self.structure_info_label = QLabel("结构：4 个乐句，每个 4 小节（起-承-转-合结构）")
                 self.structure_info_label.setWordWrap(True)
                 font = self.structure_info_label.font()
                 font.setPointSize(max(9, font.pointSize() - 1))
@@ -2186,6 +2213,8 @@ class MainWindow(QMainWindow):
                 self.style_combo.addItem("悬疑 / 惊悚", SeedMusicStyle.SUSPENSE)
                 self.style_combo.addItem("舒缓 / 美好", SeedMusicStyle.CALM)
                 self.style_combo.addItem("重金属 / 摇滚", SeedMusicStyle.ROCK)
+                self.style_combo.addItem("慢摇 / 舞曲", SeedMusicStyle.DANCE)
+                self.style_combo.addItem("工作坊 / 专注", SeedMusicStyle.WORKSHOP)
                 self.style_combo.setCurrentIndex(last_style_index)  # 恢复上次选择
                 style_row.addWidget(style_label)
                 style_row.addWidget(self.style_combo)
@@ -2291,12 +2320,15 @@ class MainWindow(QMainWindow):
                 """根据选择的长度预设更新结构说明"""
                 bars = self.length_preset_combo.currentData()
                 structure_descriptions = {
-                    4: "结构：1 个乐句，4 小节（简单重复结构）",
-                    8: "结构：2 个乐句，每个 4 小节（问句-答句结构）",
-                    12: "结构：3 个乐句，每个 4 小节（起-承-转结构）",
                     16: "结构：4 个乐句，每个 4 小节（起-承-转-合结构）",
                     24: "结构：6 个乐句，每个 4 小节（扩展段落结构）",
                     32: "结构：8 个乐句，每个 4 小节（完整段落结构）",
+                    48: "结构：12 个乐句，每个 4 小节（短曲：Intro + Verse + Chorus）",
+                    64: "结构：16 个乐句，每个 4 小节（中曲：Intro + Verse + Chorus + Verse + Chorus）",
+                    80: "结构：20 个乐句，每个 4 小节（长曲：Intro + Verse + Chorus + Verse + Chorus + Bridge）",
+                    96: "结构：24 个乐句，每个 4 小节（完整曲：Intro + Verse + Chorus + Verse + Chorus + Bridge + Chorus）",
+                    112: "结构：28 个乐句，每个 4 小节（扩展曲：Intro + Verse + Chorus + Verse + Chorus + Bridge + Chorus + Outro）",
+                    128: "结构：32 个乐句，每个 4 小节（完整作品：包含所有部分，适合完整曲子）",
                 }
                 desc = structure_descriptions.get(bars, f"结构：{bars} 小节")
                 self.structure_info_label.setText(desc)
@@ -2724,30 +2756,79 @@ class MainWindow(QMainWindow):
             
             # 先更新tracks，然后强制全量刷新UI（清除所有旧的UI元素，确保track引用正确）
             self.sequence_widget.set_tracks(project.tracks, preserve_selection=False)
-            self.sequence_widget.refresh(force_full_refresh=True)
-            self.refresh_ui()
             
-            progress.setLabelText("正在完成导入...")
-            progress.setValue(90)
+            # 强制刷新UI，确保所有内容正确显示
+            self.sequence_widget.refresh(force_full_refresh=True)
+            
+            # 确保视图更新（修复：如果窗口未全屏，可能需要强制更新视图和场景）
+            self.sequence_widget.view.update()
+            self.sequence_widget.view.repaint()
+            # 强制更新场景
+            if hasattr(self.sequence_widget, 'scene'):
+                self.sequence_widget.scene.update()
+            QApplication.processEvents()
+            
+            # 延迟再次刷新以确保所有内容正确显示（特别是音符）
+            QTimer.singleShot(200, lambda: (
+                self.sequence_widget.refresh(force_full_refresh=True),
+                self.sequence_widget.view.update(),
+                self.sequence_widget.view.repaint()
+            ))
+            
+            progress.setLabelText("正在更新界面组件...")
+            progress.setValue(85)
             QApplication.processEvents()
             
             # 更新BPM显示
             self.bpm_spinbox.setValue(int(project.bpm))
             
-            progress.setValue(100)
-            progress.close()
+            # 更新统一编辑器BPM
+            self.unified_editor.set_bpm(project.bpm)
+            
+            # 更新播放设置面板
+            if hasattr(self, 'playback_settings_panel'):
+                self.playback_settings_panel.set_tracks(project.tracks)
+                self.playback_settings_panel.set_volume_ratios(self.sequencer.playback_volume_ratios)
+            
+            # 更新进度条的总时长
+            if hasattr(self.sequence_widget, 'progress_bar'):
+                total_duration = project.get_total_duration()
+                self.sequence_widget.progress_bar.set_total_time(total_duration)
+            
+            progress.setLabelText("正在完成导入...")
+            progress.setValue(95)
+            QApplication.processEvents()
             
             # 更新文件名显示
             self._update_file_name_display()
+            
+            progress.setValue(100)
+            progress.setLabelText("导入完成！")
+            QApplication.processEvents()
+            
+            # 等待一小段时间，让用户看到"导入完成"的消息
+            import time
+            time.sleep(0.1)
+            
+            progress.close()
+            
             self.statusBar().showMessage(f"已导入MIDI: {file_path}")
+            
+            # 保存MIDI文件目录
+            directory = os.path.dirname(file_path)
+            self.settings.setValue("last_midi_directory", directory)
         except Exception as e:
             error_msg = f"导入MIDI失败:\n{str(e)}"
             show_error_with_console(self, "错误", error_msg, "critical", exc_info=sys.exc_info())
     
     def import_midi(self):
         """导入MIDI文件（保留以兼容旧代码）"""
-        # 获取上次打开的目录
-        last_dir = self.settings.value("last_open_directory", "")
+        # 获取上次打开的MIDI目录（优先使用专门的MIDI目录设置）
+        last_dir = self.settings.value("last_midi_directory", "")
+        # 如果没有MIDI目录设置，使用通用目录设置
+        if not last_dir or not os.path.exists(last_dir):
+            last_dir = self.settings.value("last_open_directory", "")
+        # 如果还是没有或不存在，使用空字符串
         if not last_dir or not os.path.exists(last_dir):
             last_dir = ""
         
@@ -2759,6 +2840,7 @@ class MainWindow(QMainWindow):
         if file_path:
             directory = os.path.dirname(file_path)
             self.settings.setValue("last_open_directory", directory)
+            self.settings.setValue("last_midi_directory", directory)  # 专门保存MIDI目录
             self.import_midi_file(file_path)
     
     
@@ -2837,11 +2919,17 @@ class MainWindow(QMainWindow):
         
         # 如果正在播放，实时更新每个音轨的音量（通过Channel，无需重新生成音频）
         if self.sequencer.playback_state.is_playing:
-            # 使用防抖机制，避免频繁更新
-            self._playback_settings_restart_timer.stop()
-            self._playback_settings_restart_timer.timeout.disconnect()
-            self._playback_settings_restart_timer.timeout.connect(self._update_playback_volumes_realtime)
-            self._playback_settings_restart_timer.start(50)  # 50ms延迟，快速响应
+            # 检查是否有音轨被设置为0%或禁用，如果有，立即更新（不延迟）
+            has_zero_volume = any(ratio <= 0.001 for ratio in ratios.values())
+            if has_zero_volume:
+                # 如果有音轨被静音，立即更新（不延迟）
+                self._update_playback_volumes_realtime()
+            else:
+                # 使用防抖机制，避免频繁更新
+                self._playback_settings_restart_timer.stop()
+                self._playback_settings_restart_timer.timeout.disconnect()
+                self._playback_settings_restart_timer.timeout.connect(self._update_playback_volumes_realtime)
+                self._playback_settings_restart_timer.start(50)  # 50ms延迟，快速响应
         else:
             self.statusBar().showMessage("播放音量占比已更新")
     
@@ -2851,11 +2939,27 @@ class MainWindow(QMainWindow):
             return
         
         # 为每个音轨实时更新音量
+        # 获取当前播放的音量缩放因子（用于防止削波）
+        volume_scale = getattr(self.sequencer, 'current_volume_scale', 1.0)
+        
+        # 获取播放启用状态
+        playback_enabled = getattr(self.sequencer, 'playback_enabled_tracks', {})
+        
         for track in self.sequencer.project.tracks:
             track_id = id(track)
-            volume_ratio = self.sequencer.playback_volume_ratios.get(track_id, 1.0) if self.sequencer.playback_volume_ratios else 1.0
-            # 实时设置音轨音量（传入音轨的原始音量）
-            self.sequencer.audio_engine.set_track_volume(track_id, volume_ratio, track.volume)
+            # 检查音轨是否被启用（如果playback_enabled_tracks存在，使用它；否则使用track.enabled）
+            is_enabled = playback_enabled.get(track_id, track.enabled) if playback_enabled else track.enabled
+            
+            if not is_enabled:
+                # 如果音轨被禁用，直接设置为0音量
+                self.sequencer.audio_engine.set_track_volume(track_id, 0.0, track.volume)
+            else:
+                # 如果音轨被启用，应用音量占比
+                volume_ratio = self.sequencer.playback_volume_ratios.get(track_id, 1.0) if self.sequencer.playback_volume_ratios else 1.0
+                # 实时设置音轨音量（需要应用音量缩放因子）
+                # 最终音量 = volume_ratio * volume_scale * master_volume
+                # 注意：track.volume已经在音频生成时应用了，所以这里不需要再乘以track.volume
+                self.sequencer.audio_engine.set_track_volume(track_id, volume_ratio * volume_scale, track.volume)
         
         self.statusBar().showMessage("播放音量已实时更新")
     
@@ -2868,13 +2972,19 @@ class MainWindow(QMainWindow):
         print(f"[DEBUG] on_playback_track_selection_changed - enabled_tracks: {enabled_tracks}")
         print(f"[DEBUG] sequencer.playback_enabled_tracks set to: {self.sequencer.playback_enabled_tracks}")
         
-        # 如果正在播放，需要重新生成音频（因为音轨启用状态改变）
+        # 如果正在播放，立即更新音轨的启用状态（实时静音/恢复）
         if self.sequencer.playback_state.is_playing:
-            # 停止之前的定时器，重新开始计时
-            self._playback_settings_restart_timer.stop()
-            self._playback_settings_restart_timer.timeout.disconnect()
-            self._playback_settings_restart_timer.timeout.connect(self._restart_playback_from_current_position)
-            self._playback_settings_restart_timer.start(self._playback_settings_restart_delay)
+            # 立即应用启用/禁用状态（实时生效，无需等待重新生成）
+            for track in self.sequencer.project.tracks:
+                track_id = id(track)
+                is_enabled = enabled_tracks.get(track_id, track.enabled)
+                # 立即设置启用/禁用状态（禁用时会立即静音）
+                self.sequencer.audio_engine.set_track_enabled(track_id, is_enabled)
+            
+            # 立即更新音量（确保被禁用的音轨音量设为0，启用的音轨恢复正确音量）
+            # 注意：不需要重新生成音频，因为我们已经通过Channel实时控制了音量
+            self._update_playback_volumes_realtime()
+            self.statusBar().showMessage("播放音轨启用状态已实时更新")
         else:
             self.statusBar().showMessage("播放音轨启用状态已更新")
     
@@ -2938,7 +3048,7 @@ class MainWindow(QMainWindow):
                                     if playback_enabled.get(id(t), t.enabled)]
                 else:
                     enabled_tracks = [t for t in self.sequencer.project.tracks if t.enabled]
-                user_selected = [t for t in self.oscilloscope_widget._selected_tracks_for_render if t in enabled_tracks]
+                    user_selected = [t for t in self.oscilloscope_widget._selected_tracks_for_render if t in enabled_tracks]
                 if user_selected:
                     # 用户选择的音轨存在且启用，使用它们
                     self.oscilloscope_widget.set_tracks(user_selected)

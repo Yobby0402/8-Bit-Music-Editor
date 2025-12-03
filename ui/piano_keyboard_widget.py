@@ -102,44 +102,60 @@ class PianoKeyboardWidget(QWidget):
         self.init_ui()
     
     def init_ui(self):
-        """初始化UI - 只显示八度选择和钢琴键盘（所有键按顺序排列）"""
-        layout = QVBoxLayout()
-        self.setLayout(layout)
+        """初始化UI - 使用BoxLayout左右布局，左侧是钢琴键盘，右侧是控制按钮"""
+        main_layout = QHBoxLayout()
+        main_layout.setContentsMargins(3, 3, 3, 3)  # 减小外边距
+        main_layout.setSpacing(6)  # 减小左右区域间距
+        self.setLayout(main_layout)
         
         # 背景透明，使用父容器（统一编辑器）的背景色/渐变
         from ui.theme import theme_manager
         theme = theme_manager.current_theme
         self.setStyleSheet("background: transparent;")
         
-        # 八度选择（上方，居中）
-        octave_wrapper = QWidget()
-        octave_wrapper_layout = QHBoxLayout()
-        octave_wrapper_layout.setContentsMargins(0, 0, 0, 0)
+        # ========== 左侧：钢琴键盘区域 ==========
+        left_area = QWidget()
+        left_layout = QVBoxLayout()
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(2)  # 减小行间距，减少空白
+        left_area.setLayout(left_layout)
         
-        octave_layout = QHBoxLayout()
+        # 第一排：八度按钮（使用QWidget容器包装QHBoxLayout，以便stretch factor生效）
+        octave_row_widget = QWidget()
+        # 重写resizeEvent来手动设置按钮高度
+        def resize_event(event):
+            QWidget.resizeEvent(octave_row_widget, event)
+            height = octave_row_widget.height()
+            for btn in self.octave_buttons:
+                btn.setFixedHeight(height)
+        octave_row_widget.resizeEvent = resize_event
+        
+        octave_row = QHBoxLayout()
+        octave_row.setContentsMargins(0, 0, 0, 0)
+        octave_row.setSpacing(2)  # 减小按钮间距
+        octave_row_widget.setLayout(octave_row)
+        octave_row_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        
         self.octave_buttons = []
         self.octave_group = QButtonGroup()
         
-        # 获取主题（在创建按钮之前）
-        from ui.theme import theme_manager
-        theme = theme_manager.current_theme
-        
-        # 显示0-8八度（更宽范围）
+        # 显示0-8八度（9个按钮，使用HBoxLayout自动排列）
         for octave in range(0, 9):
             btn = QPushButton(f"C{octave}")
             btn.setCheckable(True)
-            btn.setMinimumWidth(40)
-            btn.setMaximumWidth(50)
-            btn.setMinimumHeight(32)
-            # 应用主题样式，使其与其他按键统一（不在样式中固定字体大小，使用全局字体设置）
+            # 设置SizePolicy让按钮可以自由伸缩（水平扩展，垂直由resizeEvent控制）
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            # 应用主题样式
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {theme.get_color('primary')};
                     color: {theme.get_color('text_primary')};
                     border: 2px solid {theme.get_color('border')};
                     border-radius: 6px;
-                    padding: 4px 8px;
+                    padding: 2px 4px;
                     font-weight: 500;
+                    min-height: 0px;
+                    max-height: none;
                 }}
                 QPushButton:hover {{
                     background-color: {theme.get_color('primary_light')};
@@ -160,22 +176,24 @@ class PianoKeyboardWidget(QWidget):
             btn.clicked.connect(lambda checked, o=octave: self.on_octave_changed(o))
             self.octave_buttons.append(btn)
             self.octave_group.addButton(btn, octave)
-            octave_layout.addWidget(btn)
+            octave_row.addWidget(btn, 1)  # stretch factor = 1，让按钮平均分配空间
         
-        # 八度按钮居中
-        octave_wrapper_layout.addStretch()
-        octave_wrapper_layout.addLayout(octave_layout)
-        octave_wrapper_layout.addStretch()
-        octave_wrapper.setLayout(octave_wrapper_layout)
-        layout.addWidget(octave_wrapper, 0)
+        # 为每一行设置stretch factor，按比例分配垂直空间：
+        # 八度按键：20%，滑块：5%，黑键：20%，白键：55%
+        left_layout.addWidget(octave_row_widget, 20)  # 八度按键占20%
         
-        # 八度滑块区域（在八度按钮下方）
-        octave_slider_wrapper = QWidget()
-        octave_slider_layout = QHBoxLayout()
-        octave_slider_layout.setContentsMargins(20, 5, 20, 5)
+        # 第二排：八度滑块（使用QWidget容器包装QHBoxLayout）
+        octave_slider_row_widget = QWidget()
+        octave_slider_row = QHBoxLayout()
+        octave_slider_row.setContentsMargins(0, 0, 0, 0)
+        octave_slider_row_widget.setLayout(octave_slider_row)
+        octave_slider_row_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         
-        # 创建滑块
         self.octave_slider = QSlider(Qt.Horizontal)
+        # 滑块高度较小，只占5%的垂直空间
+        self.octave_slider.setMinimumHeight(20)
+        self.octave_slider.setMaximumHeight(40)
+        self.octave_slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.octave_slider.setMinimum(0)
         self.octave_slider.setMaximum(8)
         self.octave_slider.setValue(4)  # 默认C4
@@ -215,85 +233,52 @@ class PianoKeyboardWidget(QWidget):
         # 连接滑块值改变信号
         self.octave_slider.valueChanged.connect(self.on_slider_value_changed)
         
-        octave_slider_layout.addWidget(self.octave_slider)
-        octave_slider_wrapper.setLayout(octave_slider_layout)
-        octave_slider_wrapper.setMaximumHeight(36)
-        layout.addWidget(octave_slider_wrapper, 0)
+        octave_slider_row.addWidget(self.octave_slider)
+        left_layout.addWidget(octave_slider_row_widget, 5)  # 滑块占5%
         
-        # 钢琴键盘区域（黑白键分别布局，各自居中）
-        self.keys_container = PianoKeysContainer(self)
-        # 钢琴区域尽量占满剩余空间，同时允许在小窗口中压缩
-        self.keys_container.setMinimumHeight(140)
-        self.keys_container.setMaximumHeight(400)
-        self.keys_container.setStyleSheet("")  # 透明背景，继承父容器
-        self.keys_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # 第三排：黑键和休止符（使用QWidget容器包装QHBoxLayout）
+        black_keys_row_widget = QWidget()
+        # 重写resizeEvent来手动设置按钮高度
+        def black_resize_event(event):
+            QWidget.resizeEvent(black_keys_row_widget, event)
+            height = black_keys_row_widget.height()
+            for btn in self.black_buttons:
+                btn.setFixedHeight(height)
+            if self.rest_button:
+                self.rest_button.setFixedHeight(height)
+        black_keys_row_widget.resizeEvent = black_resize_event
         
-        # 创建白键和黑键
-        self.white_buttons = []
+        black_keys_row = QHBoxLayout()
+        black_keys_row.setContentsMargins(0, 0, 0, 0)
+        black_keys_row.setSpacing(2)  # 减小按钮间距
+        black_keys_row_widget.setLayout(black_keys_row)
+        black_keys_row_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        
         self.black_buttons = []
-        self.white_group = QButtonGroup()
         self.black_group = QButtonGroup()
         
-        white_notes = ["C", "D", "E", "F", "G", "A", "B"]
-        
-        # 创建白键（居中布局，所有白键宽度一致）
-        # 白键高度设为100px，与黑键50px形成2:1的比例
-        for col, note_name in enumerate(white_notes):
-            btn = MultilineButton(note_name)
-            btn.setCheckable(True)
-            # 白键高度由容器自动拉伸，设一个合理的最小/最大范围，尽量填满区域
-            btn.setMinimumHeight(70)
-            btn.setMaximumHeight(260)
-            btn.setFixedWidth(60)  # 固定宽度，确保所有白键宽度完全一致
-            # 使用Fixed策略
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            # 应用主题样式（不固定字体大小，使用全局字体）
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: white;
-                    border: 1px solid {theme.get_color('border')};
-                    padding: 2px;
-                }}
-                QPushButton:hover {{
-                    background-color: {theme.get_color('hover')};
-                }}
-                QPushButton:checked {{
-                    background-color: {theme.get_color('accent_light')};
-                    border: 2px solid {theme.get_color('accent')};
-                }}
-            """)
-            btn._note_name = note_name
-            btn._is_sharp = False
-            btn.installEventFilter(self)
-            btn.clicked.connect(lambda checked, n=note_name: self.on_note_clicked(n, False))
-            self.white_buttons.append(btn)
-            self.white_group.addButton(btn)
-            self.keys_container.add_white_key(btn, col)
-        
-        # 创建黑键（放在两个白键之间）
         black_positions = [
-            (0, "C#"),   # 在C和D之间（第0列）
-            (1, "D#"),   # 在D和E之间（第1列）
-            (3, "F#"),   # 在F和G之间（第3列）
-            (4, "G#"),   # 在G和A之间（第4列）
-            (5, "A#"),   # 在A和B之间（第5列）
+            (0, "C#"),   # 在C和D之间
+            (1, "D#"),   # 在D和E之间
+            (3, "F#"),   # 在F和G之间
+            (4, "G#"),   # 在G和A之间
+            (5, "A#"),   # 在A和B之间
         ]
         
         for col, note_name in black_positions:
             btn = MultilineButton(note_name)
             btn.setCheckable(True)
-            btn.setMinimumHeight(40)  # 黑键稍大一些，更易点击，随高度拉伸
-            btn.setMaximumHeight(180)
-            btn.setFixedWidth(40)  # 固定宽度，确保所有黑键宽度完全一致
-            # 使用Fixed策略
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            # 应用主题样式（同样不固定字体大小）
+            # 设置SizePolicy让按钮可以自由伸缩（水平扩展，垂直由resizeEvent控制）
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            # 应用主题样式
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {theme.get_color('text_primary')};
                     color: white;
                     border: 1px solid {theme.get_color('border_dark')};
-                    padding: 2px;
+                    padding: 1px;
+                    min-height: 0px;
+                    max-height: none;
                 }}
                 QPushButton:hover {{
                     background-color: {theme.get_color('accent_dark')};
@@ -309,40 +294,83 @@ class PianoKeyboardWidget(QWidget):
             btn.clicked.connect(lambda checked, n=note_name: self.on_note_clicked(n, True))
             self.black_buttons.append(btn)
             self.black_group.addButton(btn)
-            # 添加黑键到容器（第一行，在两个白键中间）
-            self.keys_container.add_black_key(btn, col)
+            black_keys_row.addWidget(btn, 1)  # stretch factor = 1
         
-        # 居中显示
-        container_wrapper = QWidget()
-        wrapper_layout = QHBoxLayout()
-        wrapper_layout.addStretch()
-        wrapper_layout.addWidget(self.keys_container)
-        wrapper_layout.addStretch()
-        wrapper_layout.setContentsMargins(0, 0, 0, 0)
-        container_wrapper.setLayout(wrapper_layout)
-        # wrapper 跟随 keys_container，高度完全由外层布局控制
-        container_wrapper.setMinimumHeight(140)
-        container_wrapper.setMaximumHeight(400)
-        
-        layout.addWidget(container_wrapper, 1)
-        
-        # 休止符按钮区域（在钢琴键盘下方）
+        # 休止符按钮（由外部设置，但先创建占位）
+        self.rest_button = None
         self.rest_button_container = QWidget()
         rest_button_layout = QHBoxLayout()
-        rest_button_layout.setContentsMargins(0, 5, 0, 5)
-        rest_button_layout.addStretch()
-        
-        # 休止符按钮（由外部设置）
-        self.rest_button = None
-        
-        rest_button_layout.addStretch()
+        rest_button_layout.setContentsMargins(0, 0, 0, 0)
         self.rest_button_container.setLayout(rest_button_layout)
-        self.rest_button_container.setMaximumHeight(50)
-        layout.addWidget(self.rest_button_container)
+        # 休止符按钮也使用stretch factor，让它和其他黑键一样伸缩
+        black_keys_row.addWidget(self.rest_button_container, 1)
+        
+        left_layout.addWidget(black_keys_row_widget, 20)  # 黑键占20%
+        
+        # 第四排：白键（使用QWidget容器包装QHBoxLayout）
+        white_keys_row_widget = QWidget()
+        # 重写resizeEvent来手动设置按钮高度
+        def white_resize_event(event):
+            QWidget.resizeEvent(white_keys_row_widget, event)
+            height = white_keys_row_widget.height()
+            for btn in self.white_buttons:
+                btn.setFixedHeight(height)
+        white_keys_row_widget.resizeEvent = white_resize_event
+        
+        white_keys_row = QHBoxLayout()
+        white_keys_row.setContentsMargins(0, 0, 0, 0)
+        white_keys_row.setSpacing(2)  # 减小按钮间距
+        white_keys_row_widget.setLayout(white_keys_row)
+        white_keys_row_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        
+        self.white_buttons = []
+        self.white_group = QButtonGroup()
+        
+        white_notes = ["C", "D", "E", "F", "G", "A", "B"]
+        
+        for note_name in white_notes:
+            btn = MultilineButton(note_name)
+            btn.setCheckable(True)
+            # 设置SizePolicy让按钮可以自由伸缩（水平扩展，垂直由resizeEvent控制）
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            # 应用主题样式
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: white;
+                    border: 1px solid {theme.get_color('border')};
+                    padding: 1px;
+                    min-height: 0px;
+                    max-height: none;
+                }}
+                QPushButton:hover {{
+                    background-color: {theme.get_color('hover')};
+                }}
+                QPushButton:checked {{
+                    background-color: {theme.get_color('accent_light')};
+                    border: 2px solid {theme.get_color('accent')};
+                }}
+            """)
+            btn._note_name = note_name
+            btn._is_sharp = False
+            btn.installEventFilter(self)
+            btn.clicked.connect(lambda checked, n=note_name: self.on_note_clicked(n, False))
+            self.white_buttons.append(btn)
+            self.white_group.addButton(btn)
+            # 白键占比是其他按键的三倍（使用stretch factor）
+            white_keys_row.addWidget(btn, 3)  # stretch factor = 3
+        
+        # 白键行使用更大的stretch factor，让它占55%的垂直空间
+        left_layout.addWidget(white_keys_row_widget, 55)  # 白键占55%
+        
+        # 将左侧区域添加到主布局，占比7（70%）
+        main_layout.addWidget(left_area, 7)
+        
+        # ========== 右侧：控制按钮区域（由UnifiedEditorWidget管理）==========
+        # 右侧区域不在PianoKeyboardWidget中创建，由UnifiedEditorWidget管理
         
         # 确保布局不会裁剪内容
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
         
         # 更新显示（包括按钮文本）
         self.update_button_texts()
@@ -352,15 +380,16 @@ class PianoKeyboardWidget(QWidget):
         """设置休止符按钮（由外部调用）"""
         if self.rest_button:
             # 移除旧的按钮
-            self.rest_button_container.layout().removeWidget(self.rest_button)
+            if self.rest_button_container.layout():
+                self.rest_button_container.layout().removeWidget(self.rest_button)
             self.rest_button.setParent(None)
         
         self.rest_button = button
         if button:
-            # 添加到布局中间
+            # 添加到rest_button_container的布局中
             layout = self.rest_button_container.layout()
-            # 在addStretch之前插入
-            layout.insertWidget(1, button)
+            if layout:
+                layout.addWidget(button)
     
     def eventFilter(self, obj, event):
         """事件过滤器，用于处理鼠标悬停"""

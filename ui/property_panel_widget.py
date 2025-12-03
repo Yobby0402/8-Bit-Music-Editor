@@ -205,158 +205,195 @@ class PropertyPanelWidget(QWidget):
         batch_duty_layout.addStretch()
         batch_layout.addLayout(batch_duty_layout)
         
+        # 使用GridLayout更好地利用空间（2列布局）
+        from PyQt5.QtWidgets import QGridLayout
+        properties_grid = QGridLayout()
+        properties_grid.setSpacing(6)
+        properties_grid.setColumnStretch(1, 1)  # 第二列可拉伸
+        
+        row = 0
+        
         # 基础信息
-        info_layout = QHBoxLayout()
-        info_layout.addWidget(QLabel("音符信息:"))
+        properties_grid.addWidget(QLabel("音符信息:"), row, 0)
         self.note_info_label = QLabel("")
-        info_layout.addWidget(self.note_info_label)
-        info_layout.addStretch()
-        properties_layout.addLayout(info_layout)
+        properties_grid.addWidget(self.note_info_label, row, 1)
+        row += 1
         
         # 音高（MIDI）
-        pitch_layout = QHBoxLayout()
-        pitch_layout.addWidget(QLabel("音高 (MIDI):"))
+        properties_grid.addWidget(QLabel("音高 (MIDI):"), row, 0)
+        pitch_container = QHBoxLayout()
+        pitch_container.setContentsMargins(0, 0, 0, 0)
+        pitch_container.setSpacing(4)
         self.pitch_spinbox = QSpinBox()
         self.pitch_spinbox.setRange(0, 127)
         self.pitch_spinbox.setValue(60)
         self.pitch_spinbox.valueChanged.connect(self.on_pitch_changed)
-        pitch_layout.addWidget(self.pitch_spinbox)
-        
+        pitch_container.addWidget(self.pitch_spinbox)
         # 音高显示（音名）
         self.pitch_name_label = QLabel("C4")
         self.pitch_name_label.setMinimumWidth(50)
-        pitch_layout.addWidget(self.pitch_name_label)
-        pitch_layout.addStretch()
-        properties_layout.addLayout(pitch_layout)
+        pitch_container.addWidget(self.pitch_name_label)
+        pitch_container.addStretch()
+        pitch_widget = QWidget()
+        pitch_widget.setLayout(pitch_container)
+        properties_grid.addWidget(pitch_widget, row, 1)
+        row += 1
         
         # 开始时间（秒）
-        start_time_layout = QHBoxLayout()
-        start_time_layout.addWidget(QLabel("开始时间 (秒):"))
+        properties_grid.addWidget(QLabel("开始时间 (秒):"), row, 0)
         self.start_time_spinbox = QDoubleSpinBox()
         self.start_time_spinbox.setRange(0.0, 1000.0)
         self.start_time_spinbox.setSingleStep(0.1)
         self.start_time_spinbox.setDecimals(3)
         self.start_time_spinbox.setValue(0.0)
         self.start_time_spinbox.valueChanged.connect(self.on_start_time_changed)
-        start_time_layout.addWidget(self.start_time_spinbox)
-        start_time_layout.addStretch()
-        properties_layout.addLayout(start_time_layout)
+        properties_grid.addWidget(self.start_time_spinbox, row, 1)
+        row += 1
         
         # 结束时间（秒）
-        end_time_layout = QHBoxLayout()
-        end_time_layout.addWidget(QLabel("结束时间 (秒):"))
+        properties_grid.addWidget(QLabel("结束时间 (秒):"), row, 0)
         self.end_time_spinbox = QDoubleSpinBox()
         self.end_time_spinbox.setRange(0.0, 1000.0)
         self.end_time_spinbox.setSingleStep(0.1)
         self.end_time_spinbox.setDecimals(3)
         self.end_time_spinbox.setValue(0.5)
         self.end_time_spinbox.valueChanged.connect(self.on_end_time_changed)
-        end_time_layout.addWidget(self.end_time_spinbox)
-        end_time_layout.addStretch()
-        properties_layout.addLayout(end_time_layout)
+        properties_grid.addWidget(self.end_time_spinbox, row, 1)
+        row += 1
         
         # 时长（节拍）
-        duration_layout = QHBoxLayout()
-        duration_layout.addWidget(QLabel("时长 (拍):"))
+        properties_grid.addWidget(QLabel("时长 (拍):"), row, 0)
+        duration_container = QHBoxLayout()
+        duration_container.setContentsMargins(0, 0, 0, 0)
+        duration_container.setSpacing(4)
         self.duration_spinbox = QDoubleSpinBox()
         self.duration_spinbox.setRange(0.25, 16.0)  # 从1/4拍到16拍
         self.duration_spinbox.setSingleStep(0.25)  # 1/4拍步进
         self.duration_spinbox.setDecimals(2)
         self.duration_spinbox.setValue(1.0)  # 默认1拍
         self.duration_spinbox.valueChanged.connect(self.on_duration_changed)
-        duration_layout.addWidget(self.duration_spinbox)
-        
+        duration_container.addWidget(self.duration_spinbox)
         # 时长（秒）显示
         self.duration_seconds_label = QLabel("(0.5秒)")
-        duration_layout.addWidget(self.duration_seconds_label)
-        duration_layout.addStretch()
-        properties_layout.addLayout(duration_layout)
+        duration_container.addWidget(self.duration_seconds_label)
+        duration_container.addStretch()
+        duration_widget = QWidget()
+        duration_widget.setLayout(duration_container)
+        properties_grid.addWidget(duration_widget, row, 1)
+        row += 1
         
         # 力度
-        velocity_layout = QHBoxLayout()
-        velocity_layout.addWidget(QLabel("力度:"))
+        properties_grid.addWidget(QLabel("力度:"), row, 0)
+        velocity_container = QHBoxLayout()
+        velocity_container.setContentsMargins(0, 0, 0, 0)
+        velocity_container.setSpacing(4)
         self.velocity_slider = QSlider(Qt.Horizontal)
         self.velocity_slider.setRange(0, 127)
         self.velocity_slider.setValue(127)
         self.velocity_slider.valueChanged.connect(self.on_velocity_changed)
-        velocity_layout.addWidget(self.velocity_slider)
-        
+        velocity_container.addWidget(self.velocity_slider)
         self.velocity_label = QLabel("127")
         self.velocity_label.setMinimumWidth(40)
-        velocity_layout.addWidget(self.velocity_label)
-        properties_layout.addLayout(velocity_layout)
+        velocity_container.addWidget(self.velocity_label)
+        velocity_widget = QWidget()
+        velocity_widget.setLayout(velocity_container)
+        properties_grid.addWidget(velocity_widget, row, 1)
+        row += 1
         
         # 波形
-        waveform_layout = QHBoxLayout()
-        waveform_layout.addWidget(QLabel("波形:"))
+        properties_grid.addWidget(QLabel("波形:"), row, 0)
         self.waveform_combo = QComboBox()
         self.waveform_combo.addItems(["方波", "三角波", "锯齿波", "正弦波", "噪声"])
         self.waveform_combo.currentIndexChanged.connect(self.on_waveform_changed)
-        waveform_layout.addWidget(self.waveform_combo)
-        waveform_layout.addStretch()
-        properties_layout.addLayout(waveform_layout)
+        properties_grid.addWidget(self.waveform_combo, row, 1)
+        row += 1
         
-        # ADSR参数
+        properties_layout.addLayout(properties_grid)
+        
+        # ADSR参数（使用GridLayout）
         adsr_group = QGroupBox("ADSR包络")
-        adsr_layout = QVBoxLayout()
-        adsr_group.setLayout(adsr_layout)
+        adsr_grid = QGridLayout()
+        adsr_grid.setSpacing(6)
+        adsr_grid.setColumnStretch(1, 1)  # 第二列可拉伸
+        adsr_group.setLayout(adsr_grid)
         properties_layout.addWidget(adsr_group)
         
+        adsr_row = 0
+        
         # Attack
-        attack_layout = QHBoxLayout()
-        attack_layout.addWidget(QLabel("起音 (Attack):"))
+        adsr_grid.addWidget(QLabel("起音 (Attack):"), adsr_row, 0)
+        attack_container = QHBoxLayout()
+        attack_container.setContentsMargins(0, 0, 0, 0)
+        attack_container.setSpacing(4)
         self.attack_spinbox = QDoubleSpinBox()
         self.attack_spinbox.setRange(0.0, 1.0)
         self.attack_spinbox.setSingleStep(0.01)
         self.attack_spinbox.setDecimals(3)
         self.attack_spinbox.setValue(0.001)
         self.attack_spinbox.valueChanged.connect(self.on_adsr_changed)
-        attack_layout.addWidget(self.attack_spinbox)
-        attack_layout.addWidget(QLabel("秒"))
-        attack_layout.addStretch()
-        adsr_layout.addLayout(attack_layout)
+        attack_container.addWidget(self.attack_spinbox)
+        attack_container.addWidget(QLabel("秒"))
+        attack_container.addStretch()
+        attack_widget = QWidget()
+        attack_widget.setLayout(attack_container)
+        adsr_grid.addWidget(attack_widget, adsr_row, 1)
+        adsr_row += 1
         
         # Decay
-        decay_layout = QHBoxLayout()
-        decay_layout.addWidget(QLabel("衰减 (Decay):"))
+        adsr_grid.addWidget(QLabel("衰减 (Decay):"), adsr_row, 0)
+        decay_container = QHBoxLayout()
+        decay_container.setContentsMargins(0, 0, 0, 0)
+        decay_container.setSpacing(4)
         self.decay_spinbox = QDoubleSpinBox()
         self.decay_spinbox.setRange(0.0, 1.0)
         self.decay_spinbox.setSingleStep(0.01)
         self.decay_spinbox.setDecimals(3)
         self.decay_spinbox.setValue(0.05)
         self.decay_spinbox.valueChanged.connect(self.on_adsr_changed)
-        decay_layout.addWidget(self.decay_spinbox)
-        decay_layout.addWidget(QLabel("秒"))
-        decay_layout.addStretch()
-        adsr_layout.addLayout(decay_layout)
+        decay_container.addWidget(self.decay_spinbox)
+        decay_container.addWidget(QLabel("秒"))
+        decay_container.addStretch()
+        decay_widget = QWidget()
+        decay_widget.setLayout(decay_container)
+        adsr_grid.addWidget(decay_widget, adsr_row, 1)
+        adsr_row += 1
         
         # Sustain
-        sustain_layout = QHBoxLayout()
-        sustain_layout.addWidget(QLabel("延音 (Sustain):"))
+        adsr_grid.addWidget(QLabel("延音 (Sustain):"), adsr_row, 0)
+        sustain_container = QHBoxLayout()
+        sustain_container.setContentsMargins(0, 0, 0, 0)
+        sustain_container.setSpacing(4)
         self.sustain_spinbox = QDoubleSpinBox()
         self.sustain_spinbox.setRange(0.0, 1.0)
         self.sustain_spinbox.setSingleStep(0.01)
         self.sustain_spinbox.setDecimals(2)
         self.sustain_spinbox.setValue(0.8)
         self.sustain_spinbox.valueChanged.connect(self.on_adsr_changed)
-        sustain_layout.addWidget(self.sustain_spinbox)
-        sustain_layout.addWidget(QLabel("(0-1)"))
-        sustain_layout.addStretch()
-        adsr_layout.addLayout(sustain_layout)
+        sustain_container.addWidget(self.sustain_spinbox)
+        sustain_container.addWidget(QLabel("(0-1)"))
+        sustain_container.addStretch()
+        sustain_widget = QWidget()
+        sustain_widget.setLayout(sustain_container)
+        adsr_grid.addWidget(sustain_widget, adsr_row, 1)
+        adsr_row += 1
         
         # Release
-        release_layout = QHBoxLayout()
-        release_layout.addWidget(QLabel("释音 (Release):"))
+        adsr_grid.addWidget(QLabel("释音 (Release):"), adsr_row, 0)
+        release_container = QHBoxLayout()
+        release_container.setContentsMargins(0, 0, 0, 0)
+        release_container.setSpacing(4)
         self.release_spinbox = QDoubleSpinBox()
         self.release_spinbox.setRange(0.0, 1.0)
         self.release_spinbox.setSingleStep(0.01)
         self.release_spinbox.setDecimals(3)
         self.release_spinbox.setValue(0.1)
         self.release_spinbox.valueChanged.connect(self.on_adsr_changed)
-        release_layout.addWidget(self.release_spinbox)
-        release_layout.addWidget(QLabel("秒"))
-        release_layout.addStretch()
-        adsr_layout.addLayout(release_layout)
+        release_container.addWidget(self.release_spinbox)
+        release_container.addWidget(QLabel("秒"))
+        release_container.addStretch()
+        release_widget = QWidget()
+        release_widget.setLayout(release_container)
+        adsr_grid.addWidget(release_widget, adsr_row, 1)
         
         # 移除应用按钮，属性改变立即生效
         # 保留重置按钮
@@ -365,7 +402,7 @@ class PropertyPanelWidget(QWidget):
         reset_button.clicked.connect(self.reset_changes)
         button_layout.addWidget(reset_button)
         button_layout.addStretch()
-
+        
         # 使用统一的小按钮样式
         try:
             theme = theme_manager.current_theme

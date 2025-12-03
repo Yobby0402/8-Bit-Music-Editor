@@ -15,7 +15,8 @@ class MultilineButton(QPushButton):
     def __init__(self, text="", parent=None):
         """初始化多行按钮"""
         super().__init__(text, parent)
-        self.setMinimumHeight(40)  # 确保有足够高度显示两行文本
+        # 不在这里设置最小高度，让调用者自己设置
+        # self.setMinimumHeight(40)  # 确保有足够高度显示两行文本
         self._main_text = ""
         self._shortcut_text = ""
         self._update_text_parts()

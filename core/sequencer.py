@@ -6,6 +6,7 @@
 
 from typing import List, Optional
 from dataclasses import dataclass, field
+import numpy as np
 
 from .models import Project, Track, Note, WaveformType, TrackType
 from .audio_engine import AudioEngine
@@ -47,6 +48,8 @@ class Sequencer:
         
         # 播放时的音轨音量占比 {track_id: ratio (0-1)}，None表示使用track.volume
         self.playback_volume_ratios: dict = {}
+        # 当前播放的音量缩放因子（用于防止多音轨混合时削波）
+        self.current_volume_scale: float = 1.0
         # 播放时的音轨启用状态 {track_id: enabled (bool)}，None表示使用track.enabled
         self.playback_enabled_tracks: dict = {}
     
@@ -280,13 +283,40 @@ class Sequencer:
         self._current_sounds = []
         channels_to_start = []  # [(channel, sound, loops), ...]
         
+        # 计算实际播放的音轨数量（排除空音频）
+        valid_tracks = [t for t, audio, _ in track_audio_list if len(audio) > 0]
+        num_tracks = len(valid_tracks)
+        
+        # 当多个音轨同时播放时，需要降低每个音轨的音量以防止硬件混合时的削波
+        # 使用更保守的衰减策略，确保混合后不会失真
+        if num_tracks > 1:
+            # 使用 1/N 衰减，这样N个音轨混合后的总音量约为单个音轨的1倍
+            # 这是最保守的方法，确保不会削波，但可能会稍微降低整体音量
+            # 用户可以通过主音量或播放设置中的音量占比来调整
+            volume_scale = 1.0 / num_tracks
+        else:
+            volume_scale = 1.0
+        
+        # 保存音量缩放因子，用于实时音量更新
+        self.current_volume_scale = volume_scale
+        print(f"[DEBUG] sequencer.play() - num_tracks: {num_tracks}, volume_scale: {volume_scale:.4f}")
+        
         for track, audio_data, track_id in track_audio_list:
+            # 调试信息：检查音频数据
+            print(f"[DEBUG] Track: {track.name}, track_id: {track_id}, audio_len: {len(audio_data)}, track.volume: {track.volume}")
             if len(audio_data) == 0:
+                print(f"[DEBUG] Skipping track {track.name} - empty audio")
                 continue
+            
+            # 检查音频数据是否全为0
+            if np.max(np.abs(audio_data)) < 0.001:
+                print(f"[DEBUG] Warning: Track {track.name} audio is nearly silent (max amplitude: {np.max(np.abs(audio_data))})")
             
             # 获取该音轨的音量占比
             volume_ratio = self.playback_volume_ratios.get(track_id, 1.0) if self.playback_volume_ratios else 1.0
-            initial_volume = track.volume * volume_ratio
+            # 注意：track.volume已经在generate_note_audio中应用到音频了
+            # 所以这里只需要传入volume_ratio，最终音量 = volume_ratio * master_volume * volume_scale
+            initial_volume = volume_ratio * volume_scale  # 应用音量缩放以防止削波
             
             # 创建Sound对象和Channel，但不立即播放
             sound, channel = self.audio_engine.prepare_track_audio(
