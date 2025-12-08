@@ -34,12 +34,21 @@ class MidiIO:
         ticks_per_beat = mid.ticks_per_beat
         
         # 从所有轨道中查找第一个tempo消息
+        # 注意：必须在解析轨道之前找到tempo，因为解析时需要正确的tempo来计算时间
+        # 重要：MIDI标准规定，如果没有tempo消息，默认使用120 BPM
+        # 但有些MIDI文件可能没有tempo消息，我们需要确保正确解析
+        tempo_found = False
+        initial_tempo_microseconds = None
+        
+        # 首先在所有轨道中查找第一个tempo消息（包括轨道开头的tempo消息）
         for midi_track in mid.tracks:
             for msg in midi_track:
                 if msg.type == 'set_tempo':
                     bpm = mido.tempo2bpm(msg.tempo)
+                    initial_tempo_microseconds = msg.tempo
+                    tempo_found = True
                     break
-            if bpm != 120.0:
+            if tempo_found:
                 break
         
         # 创建项目
@@ -131,22 +140,38 @@ class MidiIO:
         """
         notes = []
         active_notes: Dict[int, Dict[str, Any]] = {}  # {note_number: {start_tick, start_time, velocity}}
-        current_tempo = bpm
+        
+        # 跟踪当前的tempo（以微秒/四分音符为单位，而不是BPM）
+        # 重要：使用传入的bpm参数来初始化tempo，确保与项目BPM一致
+        # 这个bpm应该是在导入时从MIDI文件中找到的第一个tempo消息的BPM
+        # 如果没有tempo消息，使用默认120 BPM
+        # 注意：如果MIDI文件中的tempo消息在轨道中间，前面的音符会使用这个初始tempo
+        # 但这是正确的，因为MIDI标准规定tempo消息在它出现之后才生效
+        current_tempo_microseconds = mido.bpm2tempo(bpm)
         current_time = 0.0  # 当前时间（秒）
         tick_time = 0       # 当前tick数
         
         # 根据当前tempo计算tick到秒的转换
-        def ticks_to_seconds(ticks: int, tempo_bpm: float) -> float:
-            return ticks * 60.0 / (tempo_bpm * ticks_per_beat) if tempo_bpm > 0 else 0.0
+        # 使用mido的标准公式：seconds = ticks * (tempo_microseconds / 1,000,000) / ticks_per_beat
+        def ticks_to_seconds(ticks: int, tempo_microseconds: int) -> float:
+            if tempo_microseconds <= 0 or ticks_per_beat <= 0:
+                return 0.0
+            # tempo_microseconds 是每四分音符的微秒数
+            # 每个tick的秒数 = (tempo_microseconds / 1,000,000) / ticks_per_beat
+            # 验证：对于120 BPM，tempo=500000微秒，480 ticks应该等于0.5秒（1拍）
+            result = ticks * (tempo_microseconds / 1_000_000.0) / ticks_per_beat
+            return result
         
         for msg in midi_track:
-            # 更新当前时间
+            # 更新当前时间（在tempo变化之前计算，使用旧的tempo）
             tick_time += msg.time
-            current_time += ticks_to_seconds(msg.time, current_tempo)
+            time_delta = ticks_to_seconds(msg.time, current_tempo_microseconds)
+            current_time += time_delta
             
             # 处理tempo消息（允许MIDI内部改变速度）
+            # 注意：tempo变化在当前消息的时间计算之后生效，影响后续消息
             if msg.type == 'set_tempo':
-                current_tempo = mido.tempo2bpm(msg.tempo)
+                current_tempo_microseconds = msg.tempo
                 continue
             
             # 处理note_on消息
@@ -171,8 +196,12 @@ class MidiIO:
                         start_time = note_info['start_time']
                         
                         # 如果启用吸附对齐，对齐到1/4拍网格
+                        # 注意：使用当前tempo（current_tempo_microseconds）而不是初始bpm，以正确处理tempo变化
                         if snap_to_beat:
-                            beats_per_second = bpm / 60.0
+                            # 使用当前tempo计算节拍，而不是初始bpm
+                            # 这样可以正确处理MIDI文件中的tempo变化
+                            current_tempo_bpm = mido.tempo2bpm(current_tempo_microseconds)
+                            beats_per_second = current_tempo_bpm / 60.0
                             start_beats = start_time * beats_per_second
                             # 对齐到1/4拍
                             start_beats = round(start_beats * 4) / 4

@@ -115,9 +115,13 @@ class AudioEngine:
             return np.array([], dtype=np.float32)
         
         # 计算BPM比例（如果提供了BPM和原始BPM）
+        # 只有当 original_bpm 和 current_bpm 不同时才缩放
         bpm_ratio = 1.0
         if bpm is not None and original_bpm is not None and original_bpm > 0:
-            bpm_ratio = original_bpm / bpm  # 如果BPM变快，比例变小，时间变短
+            if abs(original_bpm - bpm) > 0.01:  # 允许小的浮点误差
+                bpm_ratio = original_bpm / bpm  # 如果BPM变快，比例变小，时间变短
+            else:
+                bpm_ratio = 1.0  # BPM相同，不缩放
         
         # 根据音轨类型选择不同的生成方法
         if track.track_type == TrackType.DRUM_TRACK:
@@ -138,12 +142,86 @@ class AudioEngine:
         if not track.notes:
             return np.array([], dtype=np.float32)
         
-        # 确定时间范围（不需要乘以bpm_ratio，因为这是目标播放时长）
+        # 如果 BPM 相同（bpm_ratio ≈ 1.0），直接使用原始时间，不缩放
+        if abs(bpm_ratio - 1.0) < 0.001:
+            # 不缩放，直接使用原始时间
+            if end_time is None:
+                max_end = max(note.end_time for note in track.notes)
+                end_time = max_end
+            
+            duration = end_time - start_time
+            if duration <= 0:
+                return np.array([], dtype=np.float32)
+            
+            num_samples = int(self.sample_rate * duration)
+            audio = np.zeros(num_samples, dtype=np.float32)
+            
+            # 生成每个音符的音频并混合
+            for note in track.notes:
+                # 跳过休止符（pitch=0）
+                if note.pitch == 0:
+                    continue
+                
+                # 检查音符是否在时间范围内（使用原始时间）
+                if note.end_time <= start_time or note.start_time >= end_time:
+                    continue
+                
+                # 计算音符在音频数组中的位置（相对于start_time）
+                note_start_sample = int((note.start_time - start_time) * self.sample_rate)
+                note_duration_samples = int(note.duration * self.sample_rate)
+                note_end_sample = note_start_sample + note_duration_samples
+                
+                # 生成音符音频（使用原始 duration）
+                note_audio = self.generate_note_audio(note, track.volume)
+                
+                # 确保不越界
+                if note_start_sample < 0:
+                    skip_samples = -note_start_sample
+                    if skip_samples < len(note_audio):
+                        note_audio = note_audio[skip_samples:]
+                        note_start_sample = 0
+                    else:
+                        continue
+                
+                if note_end_sample > num_samples:
+                    note_audio = note_audio[:num_samples - note_start_sample]
+                    note_end_sample = num_samples
+                
+                # 混合到音频数组
+                if note_start_sample < num_samples and note_end_sample > 0 and len(note_audio) > 0:
+                    actual_length = min(len(note_audio), note_end_sample - note_start_sample)
+                    if actual_length > 0:
+                        audio[note_start_sample:note_start_sample + actual_length] += note_audio[:actual_length]
+            
+            # 应用轨道效果
+            if len(audio) > 0:
+                audio = self.effect_processor.apply_effect_chain(
+                    audio,
+                    filter_params=track.filter_params,
+                    delay_params=track.delay_params,
+                    tremolo_params=track.tremolo_params,
+                    vibrato_params=track.vibrato_params
+                )
+                
+                max_amplitude = np.max(np.abs(audio))
+                if max_amplitude > 0.95:
+                    audio = audio * (0.95 / max_amplitude)
+            
+            return audio
+        
+        # BPM 不同，需要缩放时间
+        # 根据 BPM 比例缩放时间范围
+        # bpm_ratio = original_bpm / current_bpm
+        # 如果 BPM 变慢（current_bpm < original_bpm），bpm_ratio > 1，时间变长
+        # 如果 BPM 变快（current_bpm > original_bpm），bpm_ratio < 1，时间变短
         if end_time is None:
             max_end = max(note.end_time for note in track.notes)
             end_time = max_end
         
-        duration = end_time - start_time
+        # 缩放时间范围
+        scaled_start_time = start_time * bpm_ratio
+        scaled_end_time = end_time * bpm_ratio
+        duration = scaled_end_time - scaled_start_time
         if duration <= 0:
             return np.array([], dtype=np.float32)
         
@@ -156,17 +234,26 @@ class AudioEngine:
             if note.pitch == 0:
                 continue
             
-            # 检查音符是否在时间范围内（使用原始时间，不应用bpm_ratio）
-            if note.end_time <= start_time or note.start_time >= end_time:
+            # 缩放音符的时间（根据 BPM 比例）
+            scaled_note_start_time = note.start_time * bpm_ratio
+            scaled_note_duration = note.duration * bpm_ratio
+            scaled_note_end_time = scaled_note_start_time + scaled_note_duration
+            
+            # 检查音符是否在时间范围内
+            if scaled_note_end_time <= scaled_start_time or scaled_note_start_time >= scaled_end_time:
                 continue
             
-            # 计算音符在音频数组中的位置（相对于start_time）
-            note_start_sample = int((note.start_time - start_time) * self.sample_rate)
-            note_duration_samples = int(note.duration * self.sample_rate)
+            # 计算音符在音频数组中的位置（相对于scaled_start_time）
+            note_start_sample = int((scaled_note_start_time - scaled_start_time) * self.sample_rate)
+            note_duration_samples = int(scaled_note_duration * self.sample_rate)
             note_end_sample = note_start_sample + note_duration_samples
             
-            # 生成音符音频
-            note_audio = self.generate_note_audio(note, track.volume)
+            # 生成音符音频（使用缩放后的 duration）
+            # 创建一个临时的 Note 对象，使用缩放后的 duration
+            from copy import copy
+            scaled_note = copy(note)
+            scaled_note.duration = scaled_note_duration
+            note_audio = self.generate_note_audio(scaled_note, track.volume)
             
             # 确保不越界
             if note_start_sample < 0:
@@ -336,29 +423,17 @@ class AudioEngine:
             # 计算播放时的音量（track.volume * 播放占比）
             track_id = id(track)
             
-            # 调试信息：检查 playback_volume_ratios 的传递
-            if playback_volume_ratios:
-                print(f"[DEBUG] Track: {track.name}, track_id: {track_id}")
-                print(f"[DEBUG] playback_volume_ratios keys: {list(playback_volume_ratios.keys())}")
-                print(f"[DEBUG] track_id in playback_volume_ratios: {track_id in playback_volume_ratios}")
-                if track_id in playback_volume_ratios:
-                    print(f"[DEBUG] playback_volume_ratios[{track_id}] = {playback_volume_ratios[track_id]}")
-            
             if playback_volume_ratios and track_id in playback_volume_ratios:
                 playback_volume = track.volume * playback_volume_ratios[track_id]
-                print(f"[DEBUG] track.volume: {track.volume}, playback_ratio: {playback_volume_ratios[track_id]}, playback_volume: {playback_volume}")
             else:
                 playback_volume = track.volume
-                print(f"[DEBUG] Using default track.volume: {playback_volume}")
             
             track_audio = self.generate_track_audio(track, start_time, end_time, bpm, original_bpm)
             
             # 应用播放音量占比（如果与track.volume不同）
             if playback_volume != track.volume:
                 volume_ratio = playback_volume / track.volume if track.volume > 0 else 0
-                print(f"[DEBUG] Applying volume_ratio: {volume_ratio}, track_audio shape: {track_audio.shape}, max: {np.max(np.abs(track_audio))}")
                 track_audio = track_audio * volume_ratio
-                print(f"[DEBUG] After applying ratio, max: {np.max(np.abs(track_audio))}")
             
             # 确保长度匹配
             min_len = min(len(mixed_audio), len(track_audio))
@@ -393,30 +468,28 @@ class AudioEngine:
         # 根据播放设置面板的勾选状态决定哪些轨道启用
         # 如果提供了playback_enabled_tracks，使用它；否则使用track.enabled
         playback_enabled = getattr(project, '_playback_enabled_tracks', None)
-        print(f"[DEBUG] generate_project_audio - playback_enabled: {playback_enabled}")
         if playback_enabled:
             enabled_tracks = [track for track in project.tracks 
                             if playback_enabled.get(id(track), track.enabled)]
-            print(f"[DEBUG] generate_project_audio - using playback_enabled, enabled tracks: {[t.name for t in enabled_tracks]}")
         else:
             enabled_tracks = [track for track in project.tracks if track.enabled]
-            print(f"[DEBUG] generate_project_audio - using track.enabled, enabled tracks: {[t.name for t in enabled_tracks]}")
         
-        # 为了保证"时间轴上的音符位置"和"实际播放时间"严格一致，
-        # 这里不再根据 BPM 对时间做二次缩放，而是直接使用 note.start_time / duration
-        # 作为绝对秒数来生成音频。
-        #
-        # 说明：
-        # - MIDI 导入时已经把 tick 换算成了秒，并写入 Note.start_time / duration；
-        # - 如果在这里再根据 (original_bpm, project.bpm) 做缩放，
-        #   音频时长会被拉伸/压缩，而网格上的音符位置仍然保持原始秒数，
-        #   导致播放线"越来越快超过音符"。
-        # - 因此这里仍然禁用「根据 original_bpm 进行二次缩放」：original_bpm 始终为 None。
-        # - 但为了让使用"节拍"为单位的鼓点（DrumEvent）能够按当前 BPM 正确换算为秒，
-        #   需要把 project.bpm 作为 bpm 传入，仅用于 DrumEvent 的节拍→秒转换。
-
+        # MIDI导入时，时间已经基于正确的BPM计算，直接使用原始时间，不进行缩放
+        # 只有当用户手动修改BPM时才需要缩放
         project_bpm = getattr(project, "bpm", None)
-        return self.mix_tracks(enabled_tracks, start_time, end_time, bpm=project_bpm, original_bpm=None,
+        project_original_bpm = getattr(project, "original_bpm", None)
+        
+        # 如果 original_bpm 和 current_bpm 相同，不缩放（MIDI导入的情况）
+        # 只有当用户修改了BPM时才缩放
+        if project_original_bpm is None:
+            project_original_bpm = project_bpm
+        
+        # 如果 BPM 相同，不缩放（避免不必要的计算和误差）
+        if project_original_bpm is not None and project_bpm is not None:
+            if abs(project_original_bpm - project_bpm) < 0.01:
+                project_original_bpm = None  # 设置为 None 表示不缩放
+        
+        return self.mix_tracks(enabled_tracks, start_time, end_time, bpm=project_bpm, original_bpm=project_original_bpm,
                               playback_volume_ratios=playback_volume_ratios)
     
     def generate_track_audio_list(
@@ -445,18 +518,21 @@ class AudioEngine:
             enabled_tracks = [track for track in project.tracks if track.enabled]
         
         project_bpm = getattr(project, "bpm", None)
+        project_original_bpm = getattr(project, "original_bpm", None)
+        if project_original_bpm is None:
+            project_original_bpm = project_bpm
+        
+        # 如果 BPM 相同，不缩放（避免不必要的计算和误差）
+        if project_original_bpm is not None and project_bpm is not None:
+            if abs(project_original_bpm - project_bpm) < 0.01:
+                project_original_bpm = None  # 设置为 None 表示不缩放
+        
         track_audio_list = []
         
         for track in enabled_tracks:
             track_id = id(track)
             # 为每个音轨生成单独的音频（不应用playback_volume_ratios，通过Channel控制）
-            track_audio = self.generate_track_audio(track, start_time, end_time, project_bpm, None)
-            # 调试信息
-            audio_max = np.max(np.abs(track_audio)) if len(track_audio) > 0 else 0.0
-            print(f"[DEBUG] generate_track_audio_list - Track: {track.name}, type: {track.track_type}, "
-                  f"audio_len: {len(track_audio)}, max_amplitude: {audio_max:.4f}, "
-                  f"has_notes: {len(track.notes) if hasattr(track, 'notes') else 0}, "
-                  f"has_drums: {len(track.drum_events) if hasattr(track, 'drum_events') else 0}")
+            track_audio = self.generate_track_audio(track, start_time, end_time, project_bpm, project_original_bpm)
             track_audio_list.append((track, track_audio, track_id))
         
         return track_audio_list
@@ -493,9 +569,7 @@ class AudioEngine:
             channel_index = self._next_channel_index
             channel = pygame.mixer.Channel(channel_index)
             self._next_channel_index = (self._next_channel_index + 1) % 32  # 循环使用32个Channel
-            print(f"[DEBUG] prepare_track_audio - allocated channel {channel_index} for track_id {track_id}")
         except Exception as e:
-            print(f"[DEBUG] prepare_track_audio - failed to allocate channel: {e}")
             # 回退到find_channel
             channel = pygame.mixer.find_channel(force=True)
             if channel is None:
@@ -510,7 +584,6 @@ class AudioEngine:
             final_volume = volume * self.master_volume  # 结合主音量
         
         channel.set_volume(final_volume)
-        print(f"[DEBUG] prepare_track_audio - track_id: {track_id}, volume: {volume}, final_volume: {final_volume}, master_volume: {self.master_volume}")
         
         # 保存Channel引用
         self._current_channels.append(channel)
@@ -558,7 +631,6 @@ class AudioEngine:
                 channel = pygame.mixer.Channel(channel_index)
                 self._next_channel_index = (self._next_channel_index + 1) % 32
             except Exception as e:
-                print(f"[DEBUG] play_audio - failed to allocate channel: {e}")
                 # 回退到find_channel
                 channel = pygame.mixer.find_channel(force=True)
                 if channel is None:
@@ -639,7 +711,6 @@ class AudioEngine:
                     # 如果仍然有问题，可以考虑使用channel.stop()，但这会停止播放
                     pass
                 
-                print(f"[DEBUG] set_track_volume - track_id: {track_id}, volume_ratio: {volume_ratio}, final_volume: {final_volume}, channel_busy: {channel.get_busy()}")
     
     def set_track_enabled(self, track_id: int, enabled: bool) -> None:
         """
@@ -660,7 +731,6 @@ class AudioEngine:
                 else:
                     # 禁用音轨：立即设置为0音量（完全静音）
                     channel.set_volume(0.0)
-                    print(f"[DEBUG] set_track_enabled - track_id: {track_id}, enabled: {enabled}, volume set to 0.0")
     
     def set_all_channels_volume(self, volume: float) -> None:
         """

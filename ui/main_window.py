@@ -868,8 +868,6 @@ class MainWindow(QMainWindow):
         # 连接序列编辑器中的添加音轨按钮
         self.sequence_widget.add_track_button.clicked.connect(self.on_add_track_clicked)
         
-        # 连接音轨悬停信号，在状态栏显示音轨名称
-        self.sequence_widget.track_hovered.connect(self.on_track_hovered)
         
         main_layout.addWidget(track_area, 1)  # 拉伸因子1，占一半
         
@@ -1808,20 +1806,6 @@ class MainWindow(QMainWindow):
         # 选中该轨道上的所有音符（这可能会触发on_selection_changed，但set_track已经设置了正确的显示）
         self.sequence_widget.select_track_notes(track)
     
-    def on_track_hovered(self, track: Track):
-        """音轨悬停，在状态栏显示音轨名称"""
-        if track:
-            self.statusBar().showMessage(f"音轨: {track.name}")
-        
-        # 设置统一编辑器的目标音轨
-        self.unified_editor.set_selected_track(track)
-        
-        # 高亮显示目标音轨
-        self.sequence_widget.set_highlighted_track(track)
-        
-        # 确保属性面板保持音轨编辑模式（防止on_selection_changed覆盖），并切换到属性面板标签
-        self.property_panel.set_track(track)
-        self._focus_property_panel()
         
         note_count = len(track.notes) if track.track_type == TrackType.NOTE_TRACK else len(track.drum_events)
         self.statusBar().showMessage(f"已选中音轨: {track.name} ({note_count} 个音符/事件)")
@@ -3235,9 +3219,30 @@ class MainWindow(QMainWindow):
         """更新播放状态和播放头"""
         if self.sequencer.playback_state.is_playing and self.playback_start_time:
             import time
-            # 计算当前播放时间
+            # 计算当前播放时间（实际播放时间）
             elapsed_time = time.time() - self.playback_start_time
-            current_time = self.playback_start_offset + elapsed_time
+            actual_playback_time = self.playback_start_offset + elapsed_time
+            
+            # 根据 BPM 比例调整播放线显示时间
+            # 如果音频被缩放（bpm_ratio != 1），播放线需要反向缩放以匹配音符位置
+            project = self.sequencer.project
+            original_bpm = getattr(project, "original_bpm", None)
+            if original_bpm is None:
+                original_bpm = project.bpm
+            current_bpm = project.bpm
+            
+            # 计算 BPM 比例：bpm_ratio = original_bpm / current_bpm
+            # 如果 BPM 变慢（current_bpm < original_bpm），bpm_ratio > 1，音频被拉伸
+            # 例如：original_bpm=120, current_bpm=60, bpm_ratio=2.0
+            # 音符在1秒位置（原始时间），音频在2秒位置播放（缩放后时间）
+            # 当实际播放时间=2秒时，播放线应该显示1秒（才能与音符位置匹配）
+            # 因此：current_time = actual_playback_time / bpm_ratio
+            if original_bpm > 0 and current_bpm > 0 and original_bpm != current_bpm:
+                bpm_ratio = original_bpm / current_bpm
+                current_time = actual_playback_time / bpm_ratio
+            else:
+                current_time = actual_playback_time
+                bpm_ratio = 1.0
             
             # 更新播放头（无论是否有progress_bar）
             # 只有在进度条不在拖动状态时才更新播放头（避免与用户拖动冲突）
@@ -3263,7 +3268,14 @@ class MainWindow(QMainWindow):
             
             # 检查是否播放完毕（简化：如果播放头超过项目总时长，停止）
             # 优先使用音频真实结束时间（适配导入MIDI时BPM变化的情况）
-            total_duration = self.sequencer.playback_state.end_time or self.sequencer.project.get_total_duration()
+            # end_time 是音频的实际播放时长（已缩放），需要转换为原始时间进行比较
+            total_duration_actual = self.sequencer.playback_state.end_time or self.sequencer.project.get_total_duration()
+            # 将实际播放时长转换为原始时间（用于与 current_time 比较）
+            # 如果音频被拉伸2倍，实际播放时长=10秒，原始时间=5秒
+            if original_bpm > 0 and current_bpm > 0 and original_bpm != current_bpm:
+                total_duration = total_duration_actual / bpm_ratio
+            else:
+                total_duration = total_duration_actual
             if current_time >= total_duration:
                 self.stop()
         elif not self.sequencer.playback_state.is_playing:

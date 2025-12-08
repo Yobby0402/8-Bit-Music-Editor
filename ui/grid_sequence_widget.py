@@ -496,7 +496,6 @@ class GridSequenceWidget(QWidget):
     track_clicked = pyqtSignal(Track)  # 音轨被点击
     track_enabled_changed = pyqtSignal(Track, bool)  # 音轨启用状态改变
     track_deleted = pyqtSignal(Track)  # 音轨删除
-    track_hovered = pyqtSignal(Track)  # 音轨悬停信号，用于在状态栏显示音轨名称
     playhead_time_changed = pyqtSignal(float)  # 播放线时间改变
     add_melody_note = pyqtSignal(Track)
     add_bass_event = pyqtSignal(Track)
@@ -2458,29 +2457,6 @@ class GridSequenceWidget(QWidget):
             self.update_playhead_from_pos(scene_pos)
             event.accept()
             return
-        
-        # 检测鼠标悬停的音轨，并在状态栏显示音轨名称
-        # 但是，如果有选中的音符，不应该触发音轨悬停（避免切换到音轨属性面板）
-        scene_pos = self.view.mapToScene(event.pos())
-        scene_y = scene_pos.y()
-        
-        # 检查是否有选中的音符块
-        selected_items = [item for item in self.scene.selectedItems() if isinstance(item, SequenceBlock)]
-        has_selected_notes = len(selected_items) > 0
-        
-        # 只有在没有选中音符的情况下，才检测音轨悬停
-        if not has_selected_notes:
-            # 计算鼠标位置对应的音轨索引
-            # 轨道Y坐标公式：y = i * 60 + 20
-            # 轨道高度：60
-            if scene_y >= 20:  # 在第一个轨道之后
-                track_index = int((scene_y - 20) / 60)
-                if 0 <= track_index < len(self.tracks):
-                    hovered_track = self.tracks[track_index]
-                    # 检查鼠标是否真的在这个音轨的范围内
-                    track_y = track_index * 60 + 20
-                    if track_y <= scene_y < track_y + 60:
-                        self.track_hovered.emit(hovered_track)
         
         # 调用原始事件处理（用于音符拖动等）
         QGraphicsView.mouseMoveEvent(self.view, event)
