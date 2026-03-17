@@ -4,19 +4,30 @@
 用于编辑选中音符的属性（音高、时长、力度、波形、ADSR等）。
 """
 
-from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QSpinBox, QDoubleSpinBox, QComboBox, QSlider,
-    QGroupBox, QPushButton, QCheckBox, QLineEdit
-)
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor
-
-from core.models import Note, Track, WaveformType, ADSRParams, TrackType
-from core.track_events import DrumEvent
-from core.effect_processor import (
-    FilterParams, DelayParams, TremoloParams, VibratoParams, FilterType
+from PyQt5.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QSlider,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
 )
+
+from core.effect_processor import (
+    DelayParams,
+    FilterParams,
+    FilterType,
+    TremoloParams,
+)
+from core.models import Note, Track, TrackType, WaveformType
+from core.track_events import DrumEvent
 from ui.theme import theme_manager
 
 
@@ -758,8 +769,6 @@ class PropertyPanelWidget(QWidget):
             return
         
         note = self.current_note
-        track = self.current_track
-        
         # 检查是否是 DrumEvent（打击乐事件不支持在属性面板编辑）
         if isinstance(note, DrumEvent):
             return

@@ -4,18 +4,22 @@
 整合主旋律、低音和打击乐的所有功能到一个界面。
 """
 
+from PyQt5.QtCore import QEvent, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QButtonGroup, QGridLayout, QSizePolicy
+    QButtonGroup,
+    QHBoxLayout,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QEvent, QTimer
 
-from ui.piano_keyboard_widget import PianoKeyboardWidget
-from ui.theme import theme_manager
-from ui.multiline_button import MultilineButton
+from core.audio_engine import AudioEngine
 from core.models import WaveformType
 from core.track_events import DrumType
-from core.audio_engine import AudioEngine
+from ui.multiline_button import MultilineButton
+from ui.piano_keyboard_widget import PianoKeyboardWidget
+from ui.theme import theme_manager
 
 
 class UnifiedEditorWidget(QWidget):
@@ -487,7 +491,6 @@ class UnifiedEditorWidget(QWidget):
     def setup_shortcuts(self, shortcut_manager):
         """设置快捷键"""
         from PyQt5.QtWidgets import QAction
-        from PyQt5.QtGui import QKeySequence
         
         self.shortcut_manager = shortcut_manager
         

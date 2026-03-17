@@ -4,11 +4,9 @@
 支持多种音频格式的导出：WAV、MP3、OGG等
 """
 
-import numpy as np
-from typing import Optional
 import os
 
-from .models import Project
+import numpy as np
 
 
 class AudioExporter:
@@ -55,9 +53,10 @@ class AudioExporter:
         """
         # 方法1：尝试使用moviepy（会自动下载内置ffmpeg）
         try:
-            from moviepy import AudioFileClip
-            import tempfile
             import os
+            import tempfile
+
+            from moviepy import AudioFileClip
             
             # 先导出为临时WAV文件
             temp_wav = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
@@ -78,11 +77,11 @@ class AudioExporter:
                 if os.path.exists(temp_wav_path):
                     try:
                         os.unlink(temp_wav_path)
-                    except:
+                    except OSError:
                         pass  # 忽略删除失败
             
             return  # 成功，返回
-        except ImportError as e:
+        except ImportError:
             # moviepy未安装，继续尝试下一个方法
             pass  # moviepy未安装，尝试下一个方法
         except Exception as e:

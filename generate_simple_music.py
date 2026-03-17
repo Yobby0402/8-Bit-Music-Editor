@@ -6,7 +6,7 @@
 
 import json
 
-from core.models import Note, Track, Project, WaveformType, ADSRParams
+from core.models import ADSRParams, Note, Project, Track, WaveformType
 
 
 def create_simple_music():

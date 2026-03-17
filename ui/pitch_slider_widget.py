@@ -4,12 +4,11 @@
 大滑块，支持滑动试听。
 """
 
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer
-from PyQt5.QtGui import QPainter, QColor, QFont
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtWidgets import QHBoxLayout, QLabel, QSlider, QVBoxLayout, QWidget
 
-from core.waveform_generator import WaveformGenerator
 from core.audio_engine import AudioEngine
+from core.waveform_generator import WaveformGenerator
 
 
 class PitchSliderWidget(QWidget):

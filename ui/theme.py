@@ -6,7 +6,7 @@
 
 from abc import ABC, abstractmethod
 from typing import Dict, Tuple
-from PyQt5.QtGui import QColor
+
 from PyQt5.QtWidgets import QApplication
 
 
@@ -43,7 +43,7 @@ class Theme(ABC):
                 screen = app.primaryScreen()
                 dpi_scale = screen.logicalDotsPerInch() / 96.0  # 96是标准DPI
                 return max(base_size, int(base_size * dpi_scale))
-        except:
+        except Exception:
             pass
         return base_size
     
@@ -61,7 +61,7 @@ class Theme(ABC):
                 base_size = int(size_str)
                 adaptive_size = self.get_adaptive_font_size(base_size)
                 return f"font-size: {adaptive_size}px;"
-            except:
+            except Exception:
                 return match.group(0)
         
         # 匹配 font-size: XXpx; 模式

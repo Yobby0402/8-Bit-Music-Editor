@@ -4,10 +4,11 @@
 实现各种音频效果：滤波器、延迟、调制等。
 """
 
-import numpy as np
-from typing import Optional, List
+from dataclasses import dataclass
 from enum import Enum
-from dataclasses import dataclass, field
+from typing import Optional
+
+import numpy as np
 
 
 class FilterType(Enum):
@@ -109,17 +110,6 @@ class EffectProcessor:
         """应用低通滤波器"""
         # 使用简化的低通滤波器（一阶IIR）
         # 更精确的实现可以使用双二阶滤波器
-        omega = 2.0 * np.pi * cutoff / self.sample_rate
-        alpha = np.sin(omega) / (2.0 * resonance)
-        
-        cos_omega = np.cos(omega)
-        a0 = 1.0 + alpha
-        b0 = (1.0 - cos_omega) / 2.0 / a0
-        b1 = (1.0 - cos_omega) / a0
-        b2 = b0
-        a1 = -2.0 * cos_omega / a0
-        a2 = (1.0 - alpha) / a0
-        
         # 应用滤波器（使用简化的实现）
         # 为了简化，使用一阶低通滤波器
         rc = 1.0 / (2.0 * np.pi * cutoff)

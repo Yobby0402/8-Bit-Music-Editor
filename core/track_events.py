@@ -5,10 +5,10 @@
 """
 
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
 from enum import Enum
+from typing import Any, Dict, Optional
 
-from .models import WaveformType, ADSRParams
+from .models import ADSRParams, WaveformType
 
 
 class DrumType(Enum):

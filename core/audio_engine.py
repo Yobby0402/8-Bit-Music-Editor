@@ -4,15 +4,16 @@
 负责音频生成、混合和播放。
 """
 
-import numpy as np
 from typing import List, Optional
+
+import numpy as np
 import pygame
 
-from .models import Note, Track, Project, WaveformType, ADSRParams, TrackType
-from .waveform_generator import WaveformGenerator
-from .envelope_processor import EnvelopeProcessor
-from .track_events import DrumType, DrumEvent
 from .effect_processor import EffectProcessor
+from .envelope_processor import EnvelopeProcessor
+from .models import ADSRParams, Note, Project, Track, TrackType
+from .track_events import DrumType
+from .waveform_generator import WaveformGenerator
 
 
 class AudioEngine:
@@ -569,7 +570,7 @@ class AudioEngine:
             channel_index = self._next_channel_index
             channel = pygame.mixer.Channel(channel_index)
             self._next_channel_index = (self._next_channel_index + 1) % 32  # 循环使用32个Channel
-        except Exception as e:
+        except Exception:
             # 回退到find_channel
             channel = pygame.mixer.find_channel(force=True)
             if channel is None:
@@ -630,7 +631,7 @@ class AudioEngine:
                 channel_index = self._next_channel_index
                 channel = pygame.mixer.Channel(channel_index)
                 self._next_channel_index = (self._next_channel_index + 1) % 32
-            except Exception as e:
+            except Exception:
                 # 回退到find_channel
                 channel = pygame.mixer.find_channel(force=True)
                 if channel is None:
@@ -761,7 +762,7 @@ class AudioEngine:
         try:
             if pygame.mixer.get_init() is not None:
                 pygame.mixer.stop()
-        except:
+        except Exception:
             pass  # mixer可能已经关闭
         self._current_sounds.clear()
         self._current_channels.clear()
@@ -867,4 +868,3 @@ class AudioEngine:
         """清理资源"""
         self.stop_all()
         pygame.mixer.quit()
-

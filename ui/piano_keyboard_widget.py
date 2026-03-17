@@ -4,17 +4,21 @@
 使用八度+音符按钮的方式选择音高。
 """
 
+from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QButtonGroup, QSizePolicy, QGridLayout, QSlider
+    QButtonGroup,
+    QHBoxLayout,
+    QPushButton,
+    QSizePolicy,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QObject, QEvent, QRect
-from PyQt5.QtGui import QColor, QResizeEvent
 
-from ui.multiline_button import MultilineButton
-from core.waveform_generator import WaveformGenerator
 from core.audio_engine import AudioEngine
 from core.models import Note, WaveformType
+from core.waveform_generator import WaveformGenerator
+from ui.multiline_button import MultilineButton
 
 
 class PianoKeysContainer(QWidget):
@@ -528,9 +532,6 @@ class PianoKeyboardWidget(QWidget):
     def update_pitch_display(self):
         """更新音高显示（现在由外部显示，这里只发送信号）"""
         # 音高显示已移到编辑器上方，这里只发送信号
-        note_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-        octave = self.current_pitch // 12 - 1
-        note_name = note_names[self.current_pitch % 12]
         # 发送信号通知外部更新显示
         self.pitch_changed.emit(self.current_pitch)
     

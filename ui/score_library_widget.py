@@ -4,20 +4,20 @@
 用于展示和管理可复用的音符/鼓点片段。
 """
 
-from typing import Dict, Any, List
+from typing import Any, Dict, List
 
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
     QHBoxLayout,
+    QInputDialog,
+    QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTreeWidget,
     QTreeWidgetItem,
-    QMessageBox,
-    QInputDialog,
-    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt5.QtCore import Qt, pyqtSignal
 
 from ui.theme import theme_manager
 

@@ -8,9 +8,12 @@
     pip install pyinstaller
 """
 
-import PyInstaller.__main__
 import os
 import sys
+
+import PyInstaller.__main__
+
+from app_info import APP_NAME
 
 # 获取项目根目录
 project_root = os.path.dirname(os.path.abspath(__file__))
@@ -18,14 +21,11 @@ project_root = os.path.dirname(os.path.abspath(__file__))
 # PyInstaller参数
 args = [
     'main.py',                          # 主程序入口
-    '--name=8bit音乐制作器',            # 生成的exe文件名
+    f'--name={APP_NAME}',               # 生成的exe文件名
     '--onefile',                        # 打包成单个exe文件
     '--windowed',                       # 不显示控制台窗口（GUI应用）
     '--clean',                          # 清理临时文件
     '--noconfirm',                      # 覆盖输出目录而不询问
-    
-    # 包含数据文件夹
-    '--add-data=data;data',             # Windows使用分号分隔
     
     # 隐藏导入（PyQt5相关）
     '--hidden-import=PyQt5.QtCore',
@@ -61,7 +61,7 @@ try:
     PyInstaller.__main__.run(args)
     print("=" * 50)
     print("打包完成！")
-    print(f"exe文件位置: {os.path.join(project_root, 'dist', '8bit音乐制作器.exe')}")
+    print(f"exe文件位置: {os.path.join(project_root, 'dist', APP_NAME + '.exe')}")
 except Exception as e:
     print(f"打包失败: {e}")
     sys.exit(1)

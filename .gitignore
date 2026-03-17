@@ -26,6 +26,13 @@ venv/
 ENV/
 env/
 
+# 测试 / 质量工具
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
 # IDE
 .vscode/
 .idea/

@@ -7,15 +7,15 @@ PyInstaller配置文件
     pyinstaller build.spec
 """
 
+from app_info import APP_NAME
+
 block_cipher = None
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        ('data', 'data'),  # 包含data文件夹
-    ],
+    datas=[],
     hiddenimports=[
         'PyQt5.QtCore',
         'PyQt5.QtGui',
@@ -53,7 +53,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='8bit音乐制作器',
+    name=APP_NAME,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -4,13 +4,21 @@
 负责音乐序列的编辑、管理和播放控制。
 """
 
+from dataclasses import dataclass
 from typing import List, Optional
-from dataclasses import dataclass, field
+
 import numpy as np
 
-from .models import Project, Track, Note, WaveformType, TrackType
 from .audio_engine import AudioEngine
-from .command import CommandHistory, Command, AddNoteCommand, DeleteNoteCommand, ModifyNoteCommand, MoveNoteCommand, BatchModifyNotesCommand
+from .command import (
+    AddNoteCommand,
+    BatchModifyNotesCommand,
+    CommandHistory,
+    DeleteNoteCommand,
+    ModifyNoteCommand,
+    MoveNoteCommand,
+)
+from .models import Note, Project, Track, TrackType, WaveformType
 from .track_events import DrumEvent, DrumType
 
 

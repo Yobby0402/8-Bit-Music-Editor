@@ -5,11 +5,11 @@
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any, TYPE_CHECKING, Union
 from enum import Enum
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
-    from .effect_processor import FilterParams, DelayParams, TremoloParams, VibratoParams
+    from .effect_processor import DelayParams, FilterParams, TremoloParams, VibratoParams
     from .track_events import DrumEvent
 
 
@@ -26,6 +26,37 @@ class TrackType(Enum):
     """音轨类型枚举"""
     NOTE_TRACK = "note"    # 音符音轨（主旋律/低音）
     DRUM_TRACK = "drum"    # 打击乐音轨
+
+
+@dataclass
+class BPMSegment:
+    """BPM段数据模型"""
+    start_time: float  # 开始时间（秒）
+    bpm: float         # 该段的BPM值
+    end_time: Optional[float] = None  # 结束时间（秒），None表示到下一个段或项目结束
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            "start_time": self.start_time,
+            "bpm": self.bpm,
+            "end_time": self.end_time
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'BPMSegment':
+        """从字典创建"""
+        return cls(
+            start_time=data.get("start_time", 0.0),
+            bpm=data.get("bpm", 120.0),
+            end_time=data.get("end_time")
+        )
+    
+    def contains_time(self, time: float) -> bool:
+        """检查时间是否在此段内"""
+        if self.end_time is None:
+            return time >= self.start_time
+        return self.start_time <= time < self.end_time
 
 
 @dataclass
@@ -97,7 +128,6 @@ class Note:
         }
         # 添加vibrato_params（如果存在）
         if self.vibrato_params:
-            from .effect_processor import VibratoParams
             result["vibrato_params"] = {
                 "rate": self.vibrato_params.rate,
                 "depth": self.vibrato_params.depth,
@@ -272,7 +302,6 @@ class Track:
             "enabled": self.enabled,
         }
         if self.track_type == TrackType.DRUM_TRACK:
-            from .track_events import DrumEvent
             result["drum_events"] = [event.to_dict() for event in self.drum_events]
         else:
             result["notes"] = [note.to_dict() for note in self.notes]
@@ -288,7 +317,6 @@ class Track:
             "enabled": self.enabled,
         }
         if self.track_type == TrackType.DRUM_TRACK:
-            from .track_events import DrumEvent
             result["drum_events"] = [event.to_dict() for event in self.drum_events]
         else:
             result["notes"] = [note.to_dict_sequence_with_bpm(bpm) for note in self.notes]
@@ -304,7 +332,6 @@ class Track:
             "enabled": self.enabled,
         }
         if self.track_type == TrackType.DRUM_TRACK:
-            from .track_events import DrumEvent
             result["drum_events"] = [event.to_dict() for event in self.drum_events]
         else:
             result["notes"] = [note.to_dict_grid() for note in self.notes]
@@ -526,15 +553,70 @@ class Track:
 class Project:
     """项目数据模型"""
     name: str = "Untitled Project"
-    bpm: float = 120.0              # 节拍速度（当前BPM）
+    bpm: float = 120.0              # 节拍速度（当前BPM，用于兼容性，实际使用bpm_segments）
     original_bpm: Optional[float] = None  # 原始BPM（JSON生成时的BPM，用于BPM缩放）
     time_signature: tuple = (4, 4)  # 拍号（分子，分母）
     sample_rate: int = 44100        # 采样率
     tracks: List[Track] = field(default_factory=list)  # 轨道列表
+    bpm_segments: List[BPMSegment] = field(default_factory=list)  # BPM段列表（支持可变BPM）
+    
+    def __post_init__(self):
+        """初始化后处理"""
+        # 如果没有BPM段，创建一个默认段
+        if not self.bpm_segments:
+            self.bpm_segments = [BPMSegment(start_time=0.0, bpm=self.bpm)]
+    
+    def get_bpm_at_time(self, time: float) -> float:
+        """获取指定时间的BPM值"""
+        # 如果没有BPM段，使用默认BPM
+        if not self.bpm_segments:
+            return self.bpm
+        
+        # 查找包含该时间的BPM段
+        for segment in self.bpm_segments:
+            if segment.contains_time(time):
+                return segment.bpm
+        
+        # 如果没有找到，返回最后一个段的BPM
+        if self.bpm_segments:
+            return self.bpm_segments[-1].bpm
+        
+        return self.bpm
+    
+    def add_bpm_segment(self, start_time: float, bpm: float, end_time: Optional[float] = None) -> BPMSegment:
+        """添加BPM段"""
+        segment = BPMSegment(start_time=start_time, bpm=bpm, end_time=end_time)
+        self.bpm_segments.append(segment)
+        # 按开始时间排序
+        self.bpm_segments.sort(key=lambda s: s.start_time)
+        # 更新前一个段的结束时间
+        self._update_segment_end_times()
+        return segment
+    
+    def remove_bpm_segment(self, segment: BPMSegment) -> None:
+        """删除BPM段"""
+        if segment in self.bpm_segments:
+            self.bpm_segments.remove(segment)
+            # 如果删除后没有段了，创建一个默认段
+            if not self.bpm_segments:
+                self.bpm_segments = [BPMSegment(start_time=0.0, bpm=self.bpm)]
+            else:
+                self._update_segment_end_times()
+    
+    def _update_segment_end_times(self) -> None:
+        """更新BPM段的结束时间"""
+        # 按开始时间排序
+        self.bpm_segments.sort(key=lambda s: s.start_time)
+        # 更新每个段的结束时间（除了最后一个）
+        for i in range(len(self.bpm_segments) - 1):
+            self.bpm_segments[i].end_time = self.bpm_segments[i + 1].start_time
+        # 最后一个段的结束时间为None（表示到项目结束）
+        if self.bpm_segments:
+            self.bpm_segments[-1].end_time = None
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
-        return {
+        result = {
             "name": self.name,
             "bpm": self.bpm,
             "original_bpm": self.original_bpm if self.original_bpm is not None else self.bpm,
@@ -542,6 +624,10 @@ class Project:
             "sample_rate": self.sample_rate,
             "tracks": [track.to_dict() for track in self.tracks]
         }
+        # 如果有BPM段，添加BPM段信息
+        if self.bpm_segments and len(self.bpm_segments) > 1:
+            result["bpm_segments"] = [segment.to_dict() for segment in self.bpm_segments]
+        return result
     
     def to_dict_sequence(self) -> Dict[str, Any]:
         """转换为字典（序列格式，不包含start_time）"""
@@ -582,14 +668,30 @@ class Project:
             track = Track.from_dict(track_data, bpm=current_bpm)
             tracks.append(track)
         
-        return cls(
+        # 加载BPM段（如果存在）
+        bpm_segments = []
+        if "bpm_segments" in data and data["bpm_segments"]:
+            bpm_segments = [BPMSegment.from_dict(seg_data) for seg_data in data["bpm_segments"]]
+        
+        project = cls(
             name=data.get("name", "Untitled Project"),
             bpm=current_bpm,
             original_bpm=original_bpm,
             time_signature=tuple(data.get("time_signature", [4, 4])),
             sample_rate=data.get("sample_rate", 44100),
-            tracks=tracks
+            tracks=tracks,
+            bpm_segments=bpm_segments
         )
+        
+        # 如果没有BPM段，创建一个默认段
+        if not project.bpm_segments:
+            project.bpm_segments = [BPMSegment(start_time=0.0, bpm=current_bpm)]
+        else:
+            # 确保段按开始时间排序
+            project.bpm_segments.sort(key=lambda s: s.start_time)
+            project._update_segment_end_times()
+        
+        return project
     
     def add_track(self, track: Track) -> None:
         """添加轨道"""

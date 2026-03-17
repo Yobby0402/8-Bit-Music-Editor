@@ -1,19 +1,40 @@
 # 8bit音乐制作器
 
-一个功能完备的8bit音乐和音效制作器，使用PyQt5开发。
+一个基于 PyQt5 的桌面 8bit 音乐编辑器，支持音符编辑、MIDI 导入导出、音频导出、Seed 自动配乐和实时试听。
 
-## 功能特点
+## 当前版本
 
-- 🎵 完整的8bit音乐制作功能
-- 🔊 专业的音效制作工具
-- 🎮 游戏开发者友好
-- 🎨 直观的用户界面
-- ⚡ 实时预览和播放
+`3.1.1`
+
+版本号遵循 SemVer，正式变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 功能概览
+
+- 音符轨 / 鼓轨编辑
+- MIDI 导入与导出
+- WAV / MP3 / OGG 音频导出
+- Seed 多风格自动配乐
+- 示波器、属性面板、乐谱片段库
+- 多轨播放、循环和 BPM 编辑
 
 ## 安装
 
 ```bash
 pip install -r requirements.txt
+```
+
+## 开发环境
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+常用命令：
+
+```bash
+python -m ruff check app_info.py main.py tests
+python -m pytest
+python -m compileall -q app_info.py main.py core ui device build_exe.py
 ```
 
 ## 运行
@@ -24,37 +45,37 @@ python main.py
 
 ## 项目结构
 
+```text
+8bit/
+├── app_info.py        # 应用名称与版本号
+├── main.py            # 程序入口
+├── core/              # 核心逻辑
+├── ui/                # 桌面界面
+├── device/            # 设备端参考脚本
+├── docs/              # 项目文档
+├── build_exe.py       # PyInstaller 打包脚本
+└── README.md
 ```
-8bit_music_maker/
-├── core/              # 核心模块
-├── ui/                # UI模块
-├── utils/             # 工具模块
-├── data/              # 数据文件
-└── main.py            # 程序入口
-```
 
-## 开发状态
+## 文档
 
-当前版本：**v3.1.1**
+- [文档索引](docs/README.md)
+- [使用说明](docs/使用说明.md)
+- [开发进度](docs/开发进度.md)
+- [P0-P3 重构路线图](docs/p1_normalization.md)
+- [打包说明](docs/打包说明.md)
 
-最近主要更新（v3.1.1）：
+## 工程基线
 
-- **音轨列表显示优化**
-  - 修复了左侧音轨名称列表的显示问题，现在与右侧视图完全同步
-  - 移除了复选框和滚动按钮，界面更简洁
-  - 动态显示可见音轨，不再固定数量限制
-- **多选功能**
-  - 支持 Ctrl+点击进行多选音轨
-  - 支持 Shift+点击进行范围选择
-  - 多选时所有选中轨道上的音符都会正确高亮显示
-- **音符显示修复**
-  - 修复了 MIDI 导入后音符聚集在左上角的问题
-  - 音符现在从起点（x=0）开始显示，与播放线对齐
-  - 移除了音轨名称标签，音符显示更清晰
-- **交互优化**
-  - 修复了高亮逻辑，只高亮真正选中的音轨
-  - 点击空白处可以取消所有选择（包括音轨和音符）
-  - 改进了堆叠布局的位置计算，确保音符位置正确
+- `pyproject.toml`：统一 `pytest` / `ruff` 配置
+- `requirements-dev.txt`：开发依赖入口
+- `.github/workflows/ci.yml`：最小 CI，执行编译、lint 和测试
+- `tests/`：核心层回归测试
+
+## 说明
+
+- 内置的 WiFi 设备播放链路已移除，`device/` 目录目前只保留设备端参考脚本。
+- 仓库中的示例工程仍使用 JSON 作为项目文件格式。
 
 ## 许可证
 

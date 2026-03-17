@@ -4,14 +4,11 @@
 提供可视化的音符编辑界面。
 """
 
-from PyQt5.QtWidgets import (
-    QWidget, QGraphicsView, QGraphicsScene, QGraphicsItem,
-    QVBoxLayout, QHBoxLayout, QScrollBar, QLabel
-)
-from PyQt5.QtCore import Qt, QRectF, QPointF, pyqtSignal, QTimer
-from PyQt5.QtGui import QPainter, QColor, QPen, QBrush, QFont
+from PyQt5.QtCore import QRectF, Qt, pyqtSignal
+from PyQt5.QtGui import QBrush, QColor, QFont, QPainter, QPen
+from PyQt5.QtWidgets import QGraphicsItem, QGraphicsScene, QGraphicsView, QVBoxLayout, QWidget
 
-from core.models import Note, Track, WaveformType
+from core.models import Note, Track
 
 
 class NoteItem(QGraphicsItem):
@@ -193,8 +190,6 @@ class PianoRollWidget(QWidget):
         """绘制钢琴键盘"""
         # 绘制键盘区域（左侧）
         key_width = self.key_width
-        total_height = 128 * self.note_height
-        
         # 绘制白键和黑键
         note_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
         
@@ -251,9 +246,6 @@ class PianoRollWidget(QWidget):
         if event.button() == Qt.LeftButton:
             # 获取点击位置
             scene_pos = self.view.mapToScene(event.pos())
-            scene_x = scene_pos.x()
-            scene_y = scene_pos.y()
-            
             # 检查是否点击了音符
             item = self.scene.itemAt(scene_pos, self.view.transform())
             if isinstance(item, NoteItem):
@@ -299,4 +291,3 @@ class PianoRollWidget(QWidget):
             self.refresh()
             # 发送信号
             self.note_removed.emit(note_to_remove, track_to_remove)
-

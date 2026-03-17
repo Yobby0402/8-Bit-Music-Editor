@@ -17,4 +17,3 @@ soundfile>=0.10.0
 
 # MIDI处理（可选）
 mido>=1.2.0
-

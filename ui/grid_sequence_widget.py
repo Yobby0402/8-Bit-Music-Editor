@@ -4,17 +4,23 @@
 显示多个轨道，支持网格对齐。
 """
 
+from PyQt5.QtCore import QObject, QPointF, QRectF, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QBrush, QColor, QFont, QPainter, QPen, QWheelEvent
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QScrollArea, QFrame, QGraphicsView, QGraphicsScene,
-    QGraphicsItem, QGraphicsItemGroup, QPushButton, QGraphicsTextItem, QCheckBox,
-    QSplitter, QListWidget, QListWidgetItem
+    QGraphicsItem,
+    QGraphicsItemGroup,
+    QGraphicsScene,
+    QGraphicsView,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QRectF, QPointF, QObject, QTimer
-from PyQt5.QtGui import QPainter, QColor, QPen, QBrush, QFont, QWheelEvent, QMouseEvent
 
 from core.models import Note, Track, TrackType
-from core.track_events import BassEvent, DrumEvent, DrumType
+from core.track_events import DrumEvent, DrumType
 from ui.theme import theme_manager
 
 
@@ -94,7 +100,6 @@ class TrackGroup(QGraphicsItemGroup):
     def remove_note_block(self, block_key):
         """从组中移除音符块（仅用于记录）"""
         if block_key in self.note_blocks:
-            block = self.note_blocks[block_key]
             # 重构：音符块不在Group中，所以不需要removeFromGroup
             # 如果block在场景中，由调用者负责移除
             del self.note_blocks[block_key]
@@ -691,7 +696,6 @@ class GridSequenceWidget(QWidget):
         self.view.setMouseTracking(True)
         
         # 重写wheelEvent以支持Shift+滚轮和Alt+滚轮
-        original_wheel_event = self.view.wheelEvent
         self.view.wheelEvent = self.on_wheel_event
         
         # 连接选择变化信号
@@ -1265,28 +1269,6 @@ class GridSequenceWidget(QWidget):
                     }}
                 """)
     
-    def set_highlighted_track(self, track):
-        """设置高亮显示的音轨（用于显示正在插入音符的目标音轨）"""
-        self.highlighted_track = track
-        # 更新显示以反映高亮状态
-        if self.use_incremental_update:
-            # 使用增量更新，只更新轨道标签
-            for i, label_item in enumerate(self.track_label_items):
-                if label_item and label_item.scene() and i < len(self.tracks):
-                    track = self.tracks[i]
-                    is_highlighted = (self.highlighted_track is not None and id(track) == id(self.highlighted_track))
-                    theme = theme_manager.current_theme
-                    if is_highlighted:
-                        highlight_color = QColor(theme.get_color("highlight"))
-                        label_item.setDefaultTextColor(highlight_color)
-                    else:
-                        text_color = QColor(theme.get_color("text_primary"))
-                        label_item.setDefaultTextColor(text_color)
-                    label_item.is_highlighted = is_highlighted
-        else:
-            # 全量刷新
-            self.refresh()
-    
     def refresh(self, force_full_refresh: bool = False):
         """刷新显示（增量更新模式，避免空白闪烁）"""
         # 设置刷新标志，防止在刷新过程中处理信号
@@ -1363,7 +1345,7 @@ class GridSequenceWidget(QWidget):
                 self.view.setUpdatesEnabled(True)
                 self.view.update()
                 
-        except Exception as e:
+        except Exception:
             import traceback
             traceback.print_exc()
         finally:
@@ -1384,12 +1366,12 @@ class GridSequenceWidget(QWidget):
                         widget.blockSignals(True)
                         try:
                             widget.stateChanged.disconnect()
-                        except:
+                        except Exception:
                             pass
                         if proxy.scene():
                             self.scene.removeItem(proxy)
                         widget.setParent(None)
-                except (AttributeError, RuntimeError) as e:
+                except (AttributeError, RuntimeError):
                     pass
         self.checkbox_proxies.clear()
         
@@ -1502,7 +1484,7 @@ class GridSequenceWidget(QWidget):
                                 widget.blockSignals(True)
                                 try:
                                     widget.stateChanged.disconnect()
-                                except:
+                                except Exception:
                                     pass
                                 if proxy.scene():
                                     self.scene.removeItem(proxy)
@@ -1552,11 +1534,11 @@ class GridSequenceWidget(QWidget):
                     if hasattr(block, 'signals'):
                         try:
                             block.signals.clicked.disconnect()
-                        except:
+                        except Exception:
                             pass
                         try:
                             block.signals.position_changed.disconnect()
-                        except:
+                        except Exception:
                             pass
                     
                     # 从TrackGroup中移除（如果存在）
@@ -1713,8 +1695,8 @@ class GridSequenceWidget(QWidget):
     
     def _update_or_create_block(self, block_key, item, track, track_index, y, track_type):
         """更新或创建块"""
-        from core.track_events import DrumEvent
         from core.models import WaveformType
+        from core.track_events import DrumEvent
         from ui.settings_manager import get_settings_manager
 
         settings_manager = get_settings_manager()
@@ -2025,7 +2007,6 @@ class GridSequenceWidget(QWidget):
     
     def _create_track_ui(self, track, track_index, y):
         """创建轨道的UI元素（仅轨道线）- 标签和勾选框现在在左侧固定区域"""
-        from PyQt5.QtCore import Qt
         from PyQt5.QtGui import QColor, QPen
         from PyQt5.QtWidgets import QGraphicsLineItem
         
@@ -2063,8 +2044,8 @@ class GridSequenceWidget(QWidget):
         # 创建或更新轨道线
         scene_width = max(2000, self.scene.sceneRect().width())
         if not track_group.track_line:
-            from PyQt5.QtWidgets import QGraphicsLineItem
             from PyQt5.QtGui import QPen
+            from PyQt5.QtWidgets import QGraphicsLineItem
             theme = theme_manager.current_theme
             line_item = QGraphicsLineItem(100, 0, scene_width, 0, track_group)
             line_item.setPen(QPen(QColor(theme.get_color("border")), 1))
@@ -2106,7 +2087,7 @@ class GridSequenceWidget(QWidget):
         
         # 调试输出：检查堆叠后的位置
         if hasattr(self, '_debug_note_count') and self._debug_note_count > 0:
-            print(f"DEBUG: After stack layout, checking first few notes:")
+            print("DEBUG: After stack layout, checking first few notes:")
             count = 0
             for (item_id, track_id), block in list(self.note_blocks.items())[:5]:
                 if block and block.scene():
@@ -2285,8 +2266,6 @@ class GridSequenceWidget(QWidget):
         # 计算网格位置（1/4拍为单位），用于精确位置检测
         grid_unit = 0.25  # 1/4拍
         new_grid_pos = round(new_start_time * self.bpm / 60.0 / grid_unit)
-        old_grid_pos = round(old_start_time * self.bpm / 60.0 / grid_unit)
-        
         # 检查同一轨道上的其他音符
         for other_note in moved_track.notes:
             if other_note == moved_note:
@@ -2558,7 +2537,6 @@ class GridSequenceWidget(QWidget):
                 
                 # 直接修改pixels_per_beat，不使用视图变换（更简单可靠）
                 # 先更新缩放值，确保刷新时使用新值
-                old_pixels = self.pixels_per_beat
                 self.zoom_scale = new_scale
                 self.pixels_per_beat = self.base_pixels_per_beat * self.zoom_scale
                 
@@ -2654,7 +2632,6 @@ class GridSequenceWidget(QWidget):
         
         # 将视口坐标转换为场景坐标，确保标签始终显示在视口左侧
         # 视口左侧的x坐标是0，转换为场景坐标
-        viewport_left = self.view.mapToScene(0, 0).x()
         # 标签固定在视口左侧30像素处（视口坐标）
         fixed_viewport_x = 30
         # 转换为场景坐标
@@ -2768,8 +2745,8 @@ class GridSequenceWidget(QWidget):
     
     def update_block_for_note(self, note, track):
         """更新单个音符块的位置和大小（不重建场景）"""
-        from core.track_events import DrumEvent
         from core.models import WaveformType
+        from core.track_events import DrumEvent
         
         block_key = (id(note), id(track))
         if block_key in self.note_blocks:
@@ -2821,4 +2798,3 @@ class GridSequenceWidget(QWidget):
             return "drum"
         else:
             return "melody"  # 默认
-

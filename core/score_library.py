@@ -7,10 +7,10 @@
 import json
 import os
 import uuid
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
-from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QStandardPaths
+from PyQt5.QtWidgets import QApplication
 
 
 class ScoreLibrary:

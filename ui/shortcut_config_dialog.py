@@ -4,13 +4,20 @@
 允许用户自定义快捷键。
 """
 
-from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QTableWidget, QTableWidgetItem,
-    QDialogButtonBox, QMessageBox, QHeaderView
-)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QKeySequence
+from PyQt5.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+)
 
 from ui.shortcut_manager import get_shortcut_manager
 
@@ -183,7 +190,7 @@ class ShortcutConfigDialog(QDialog):
                 if not key_name:
                     # 如果无法转换为字符串，尝试使用key()方法
                     key_name = QKeySequence(key).toString()
-            except:
+            except Exception:
                 key_name = ""
             
             if not key_name:

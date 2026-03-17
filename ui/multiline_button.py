@@ -4,9 +4,9 @@
 支持显示多行文本，用于显示快捷键。
 """
 
-from PyQt5.QtWidgets import QPushButton, QStyleOptionButton, QStyle
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QPainter, QFontMetrics, QFont, QPen
+from PyQt5.QtGui import QFont, QPainter, QPen
+from PyQt5.QtWidgets import QPushButton, QStyle, QStyleOptionButton
 
 
 class MultilineButton(QPushButton):
@@ -79,7 +79,6 @@ class MultilineButton(QPushButton):
             
             # 绘制主文本（居中偏上）
             if self._main_text:
-                metrics = QFontMetrics(font)
                 main_rect = rect.adjusted(2, 2, -2, -rect.height() // 2)
                 painter.drawText(main_rect, Qt.AlignHCenter | Qt.AlignVCenter, self._main_text)
             

@@ -6,8 +6,9 @@
 
 import json
 import os
-from typing import Dict, Optional, Callable
-from PyQt5.QtCore import QObject, pyqtSignal
+from typing import Callable, Dict, Optional
+
+from PyQt5.QtCore import QObject
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import QApplication
 
@@ -129,7 +130,7 @@ class ShortcutManager(QObject):
         if shortcut_str:
             try:
                 return QKeySequence(shortcut_str)
-            except:
+            except Exception:
                 return None
         return None
     

@@ -4,9 +4,8 @@
 类似音乐播放器的进度条，支持拖动播放线位置，显示当前时间、剩余时间和总时间。
 """
 
-from PyQt5.QtWidgets import QWidget, QHBoxLayout, QLabel, QSlider
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QPainter, QPen, QColor
+from PyQt5.QtWidgets import QHBoxLayout, QLabel, QSlider, QWidget
 
 from ui.theme import theme_manager
 

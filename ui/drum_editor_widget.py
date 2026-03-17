@@ -4,14 +4,11 @@
 用于添加打击乐事件。
 """
 
-from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QComboBox, QButtonGroup
-)
-from PyQt5.QtCore import Qt, pyqtSignal, QEvent, QTimer
+from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
+from PyQt5.QtWidgets import QButtonGroup, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from core.track_events import DrumType
 from core.audio_engine import AudioEngine
+from core.track_events import DrumType
 
 
 class DrumEditorWidget(QWidget):
@@ -144,27 +141,6 @@ class DrumEditorWidget(QWidget):
         
         main_layout.addWidget(duration_area)
     
-    def on_drum_type_clicked(self, drum_type: DrumType):
-        """打击乐类型点击（直接添加）"""
-        self.selected_drum_type = drum_type
-        # 更新按钮选中状态
-        for btn in self.drum_buttons:
-            if btn._drum_type == drum_type:
-                btn.setChecked(True)
-                break
-        
-        # 更新显示
-        drum_names = {
-            DrumType.KICK: "底鼓",
-            DrumType.SNARE: "军鼓",
-            DrumType.HIHAT: "踩镲",
-            DrumType.CRASH: "吊镲"
-        }
-        if hasattr(self, 'drum_info_label'):
-            self.drum_info_label.setText(drum_names.get(drum_type, "打击乐"))
-        
-        self.add_drum()
-    
     def set_bpm(self, bpm: float):
         """设置BPM"""
         self.bpm = bpm
@@ -172,16 +148,6 @@ class DrumEditorWidget(QWidget):
     def on_drum_type_selected(self, drum_type: DrumType):
         """打击乐类型选择（仅选中，不添加）"""
         self.selected_drum_type = drum_type
-    
-    def on_drum_type_clicked(self, drum_type: DrumType):
-        """打击乐类型点击（直接添加）"""
-        self.selected_drum_type = drum_type
-        # 更新按钮选中状态
-        for btn in self.drum_buttons:
-            if btn._drum_type == drum_type:
-                btn.setChecked(True)
-                break
-        self.add_drum()
     
     def on_duration_selected(self, beats: float):
         """时长选择"""
@@ -220,4 +186,3 @@ class DrumEditorWidget(QWidget):
     def add_drum(self):
         """添加打击乐（供外部调用）"""
         self.add_event_requested.emit(self.selected_drum_type, self.selected_duration)
-

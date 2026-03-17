@@ -4,20 +4,33 @@
 提供统一的设置界面，左侧显示设置分类，右侧显示对应的设置项。
 """
 
-from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-    QStackedWidget, QWidget, QLabel, QSpinBox, QDialogButtonBox,
-    QTextEdit, QComboBox, QPushButton, QColorDialog,
-    QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QFontComboBox
-)
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont, QColor
+from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtWidgets import (
+    QColorDialog,
+    QComboBox,
+    QDialog,
+    QFontComboBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QSpinBox,
+    QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
-from ui.theme import theme_manager
-from ui.oscilloscope_widget import OscilloscopeWidget
+from core.models import WaveformType
 from ui.settings_manager import get_settings_manager
 from ui.shortcut_manager import get_shortcut_manager
-from core.models import WaveformType
+from ui.theme import theme_manager
 
 
 class SettingsDialog(QDialog):
@@ -703,8 +716,8 @@ class SettingsDialog(QDialog):
         
         # 立即应用字体（字体族 + 大小，全局），并统一全局调色板背景
         try:
+            from PyQt5.QtGui import QColor, QPalette
             from PyQt5.QtWidgets import QApplication
-            from PyQt5.QtGui import QPalette, QColor
             app = QApplication.instance()
             if app is not None:
                 font = app.font()

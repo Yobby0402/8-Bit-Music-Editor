@@ -7,12 +7,12 @@
 重构版本：使用风格配置类系统，每个风格独立管理其生成逻辑。
 """
 
-from typing import Union, List, Tuple, Optional, Dict, Callable
 import random
-from enum import Enum
 from abc import ABC, abstractmethod
+from enum import Enum
+from typing import Dict, List, Optional, Tuple, Union
 
-from .models import Project, Track, Note, WaveformType, ADSRParams, TrackType
+from .models import ADSRParams, Note, Project, Track, TrackType, WaveformType
 from .track_events import DrumEvent, DrumType
 
 
@@ -485,7 +485,6 @@ class Classic8bitStyleConfig(MusicStyleConfig):
             # 默认：根据小节位置变化
             if bar_idx % 2 == 0:
                 # 偶数小节：根音-五度交替
-                fifth_degree = (bar_root_degree + 4) % len(scale_offsets)
                 return [
                     (0.0, 2.0, 100),  # 根音
                     (2.0, 2.0, 100),  # 五度
@@ -620,7 +619,6 @@ class LofiStyleConfig(MusicStyleConfig):
             return [(0.0, beats_per_bar, 100)]
         elif variant_id == "lofi_warm":
             # 温暖变体：根音-五度交替
-            fifth_degree = (bar_root_degree + 4) % len(scale_offsets)
             return [
                 (0.0, 2.0, 100),
                 (2.0, 2.0, 100),
@@ -925,7 +923,6 @@ class SuspenseStyleConfig(MusicStyleConfig):
             # 默认：偏重 1、3 拍，但时值较短
             # 偶尔使用根音-五度交替增加不稳定性
             if rng.random() < 0.3:
-                fifth_degree = (bar_root_degree + 4) % len(scale_offsets)
                 return [
                     (0.0, 1.0, 100),
                     (2.0, 1.0, 95),
@@ -1031,7 +1028,6 @@ class CalmStyleConfig(MusicStyleConfig):
         elif variant_id == "calm_brighter":
             # 更明亮：偶尔根音-三度交替
             if rng.random() < 0.3:
-                third_degree = (bar_root_degree + 2) % len(scale_offsets)
                 return [
                     (0.0, 2.0, 100),
                     (2.0, 2.0, 95),
@@ -1082,10 +1078,6 @@ class CalmStyleConfig(MusicStyleConfig):
         else:
             return {"melody": 0.9, "bass": 0.8, "harmony": 0.6, "drum_boost": -0.1}
     
-    def get_track_volumes(self, variant_id: Optional[str] = None) -> Dict[str, float]:
-        return {"melody": 0.9, "bass": 0.8, "harmony": 0.6, "drum_boost": -0.1}
-
-
 class RockStyleConfig(MusicStyleConfig):
     """重金属/摇滚风格配置"""
     
@@ -1942,18 +1934,13 @@ def generate_simple_project_from_seed(
     # ---- 结构层：根据预设决定乐句结构 ----
     structure = get_structure_for_bars(length_bars)
     phrase_lengths = structure["phrases"]  # 每个乐句的小节数列表
-    structure_pattern = structure["pattern"]
-    
     # 程序自动决定 Intro：对于 8 小节及以上，前 2 小节作为 Intro
     intro_bars = 2 if length_bars >= 8 else 0
-    main_bars = length_bars - intro_bars
 
     # ---- 风格变体开关（不改变默认行为，只在对应变体下做轻量调整）----
-    is_battle_default = style == SeedMusicStyle.BATTLE and variant_id in ("battle_default", "default", "", None)
     is_battle_melody = style == SeedMusicStyle.BATTLE and variant_id == "battle_melody"
     is_battle_drums = style == SeedMusicStyle.BATTLE and variant_id == "battle_drums"
 
-    is_suspense_default = style == SeedMusicStyle.SUSPENSE and variant_id in ("suspense_default", "default", "", None)
     is_suspense_dense = style == SeedMusicStyle.SUSPENSE and variant_id == "suspense_dense"
     is_suspense_sparse = style == SeedMusicStyle.SUSPENSE and variant_id == "suspense_sparse"
 
@@ -1996,7 +1983,6 @@ def generate_simple_project_from_seed(
     # 使用风格配置的 ADSR，而不是在这里写死
     melody_adsr = style_params.melody_adsr
 
-    current_beat = 0.0
     last_pitch = root_midi + scale_offsets[chord_root_degree(bars_progression[0])]
     # 控制整体音域：避免旋律跑得过高或过低
     pitch_min = root_midi - 5
@@ -2387,7 +2373,6 @@ def generate_simple_project_from_seed(
                         # 为避免「音符都集中在前半小节」，仅在前 2 拍允许休止，后 2 拍保持较高填充度
                         if rng.random() < rest_prob and beat_in_bar < beats_per_bar * 0.5:
                             beat_in_bar += dur_beats
-                            current_beat = global_beat + dur_beats
                             continue
                     
                     if is_strong_beat:
@@ -2492,8 +2477,6 @@ def generate_simple_project_from_seed(
                             pitch = max(pitch_min, min(pitch, pitch_max))
 
                     last_pitch = pitch
-                    last_pitch_degree = degree_clamped  # 保存度数，用于solo
-
                     start_time = global_beat * beat_duration
 
                     # ---- 改进4：改进节奏层次（积累-释放模式）----
@@ -2648,8 +2631,6 @@ def generate_simple_project_from_seed(
                                 melody_track.notes.append(overlay_note)
 
                     beat_in_bar += dur_beats
-                    current_beat = global_beat + dur_beats
-                
                 # 如果motif总时长小于小节长度，且还没有填满小节，继续重复
                 if motif_total_beats < beats_per_bar and beat_in_bar < beats_per_bar - 1e-6:
                     # 继续循环，重复motif
@@ -3018,5 +2999,3 @@ def generate_simple_project_from_seed(
         project.add_track(drum_track)
 
     return project
-
-

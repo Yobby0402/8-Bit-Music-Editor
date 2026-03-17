@@ -1,0 +1,462 @@
+"""
+主窗口中的壳层、布局装配与菜单搭建逻辑。
+"""
+
+from __future__ import annotations
+
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QKeySequence
+from PyQt5.QtWidgets import (
+    QAction,
+    QApplication,
+    QButtonGroup,
+    QDockWidget,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QSlider,
+    QSpinBox,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from app_info import APP_NAME
+from ui.bpm_editor_widget import BPMEditorWidget
+from ui.grid_sequence_widget import GridSequenceWidget
+from ui.oscilloscope_widget import OscilloscopeWidget
+from ui.playback_settings_widget import PlaybackSettingsWidget
+from ui.property_panel_widget import PropertyPanelWidget
+from ui.score_library_widget import ScoreLibraryWidget
+from ui.style_params_widget import StyleParamsWidget
+from ui.toggle_switch_widget import ToggleSwitchWidget
+from ui.unified_editor_widget import UnifiedEditorWidget
+
+
+def calculate_default_window_geometry(
+    screen_width: int,
+    screen_height: int,
+) -> tuple[int, int, int, int]:
+    """根据屏幕尺寸计算主窗口默认几何信息。"""
+    default_width = int(screen_width * 0.8)
+    default_height = int(screen_height * 0.8)
+    return (
+        int(screen_width * 0.1),
+        int(screen_height * 0.1),
+        default_width,
+        default_height,
+    )
+
+
+def resolve_locked_dock_width(current_width: int, minimum_width: int) -> int:
+    """解析右侧 Dock 需要锁定的宽度。"""
+    return current_width if current_width > 0 else minimum_width
+
+
+class MainWindowShellOpsMixin:
+    """承载 MainWindow 的窗口壳层、布局与菜单逻辑。"""
+
+    def _build_editor_area(self) -> QWidget:
+        """构建上方统一编辑器区域。"""
+        note_selection_area = QWidget()
+        note_selection_layout = QHBoxLayout()
+        note_selection_layout.setContentsMargins(0, 0, 0, 0)
+        note_selection_area.setLayout(note_selection_layout)
+        note_selection_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        self.unified_editor = UnifiedEditorWidget(self.sequencer.get_bpm())
+        self.unified_editor.audio_engine = self.sequencer.audio_engine
+        if hasattr(self.unified_editor, "piano_keyboard"):
+            self.unified_editor.piano_keyboard.audio_engine = self.sequencer.audio_engine
+        note_selection_layout.addWidget(self.unified_editor)
+        return note_selection_area
+
+    def _build_playback_control_area(self) -> QWidget:
+        """构建播放控制区域。"""
+        playback_control_area = QWidget()
+        playback_control_area.setFixedHeight(60)
+
+        playback_control_layout = QHBoxLayout()
+        playback_control_layout.setContentsMargins(8, 6, 8, 6)
+        playback_control_layout.setSpacing(10)
+        playback_control_area.setLayout(playback_control_layout)
+
+        self.playback_button_group = QButtonGroup()
+        self.playback_button_group.setExclusive(True)
+
+        self.play_stop_button = QPushButton("▶")
+        self.play_stop_button.setToolTip("播放/停止")
+        self.play_stop_button.setCheckable(False)
+        self.play_stop_button.setFixedSize(40, 35)
+        self.play_stop_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.play_stop_button.clicked.connect(self.toggle_play_stop)
+        playback_control_layout.addWidget(self.play_stop_button)
+
+        self.stop_button = QPushButton("⏹")
+        self.stop_button.setToolTip("停止")
+        self.stop_button.setCheckable(False)
+        self.stop_button.setFixedSize(40, 35)
+        self.stop_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.stop_button.clicked.connect(self.stop)
+        playback_control_layout.addWidget(self.stop_button)
+
+        playback_control_layout.addSpacing(12)
+
+        bpm_label = QLabel("BPM:")
+        bpm_label.setFixedWidth(35)
+        bpm_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        playback_control_layout.addWidget(bpm_label)
+
+        self.bpm_spinbox = QSpinBox()
+        self.bpm_spinbox.setRange(30, 300)
+        self.bpm_spinbox.setValue(120)
+        self.bpm_spinbox.setFixedWidth(70)
+        self.bpm_spinbox.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        self.bpm_spinbox.valueChanged.connect(self.on_bpm_changed)
+        playback_control_layout.addWidget(self.bpm_spinbox)
+
+        playback_control_layout.addSpacing(12)
+
+        self.file_name_label = QLabel("")
+        self.file_name_label.setMinimumWidth(100)
+        self.file_name_label.setMaximumWidth(200)
+        self.file_name_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self.file_name_label.setToolTip("当前打开的文件")
+        playback_control_layout.addWidget(self.file_name_label)
+
+        playback_control_layout.addStretch()
+
+        view_label = QLabel("视图:")
+        view_label.setFixedWidth(35)
+        view_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        playback_control_layout.addWidget(view_label)
+
+        self.view_toggle_switch = ToggleSwitchWidget()
+        self.view_toggle_switch.setToolTip("切换视图：左侧=序列，右侧=示波器")
+        self.view_toggle_switch.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        self.view_toggle_switch.position_changed.connect(self.on_view_switch_changed)
+        playback_control_layout.addWidget(self.view_toggle_switch)
+
+        playback_control_layout.addSpacing(12)
+
+        volume_label = QLabel("音量:")
+        volume_label.setFixedWidth(35)
+        volume_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        playback_control_layout.addWidget(volume_label)
+
+        self.volume_slider = QSlider(Qt.Horizontal)
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setValue(100)
+        self.volume_slider.valueChanged.connect(self.on_volume_changed)
+        self.volume_slider.setFixedWidth(120)
+        self.volume_slider.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        playback_control_layout.addWidget(self.volume_slider)
+
+        self.volume_label = QLabel("100%")
+        self.volume_label.setFixedWidth(40)
+        self.volume_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        playback_control_layout.addWidget(self.volume_label)
+
+        return playback_control_area
+
+    def _build_track_area(self) -> tuple[QWidget, QWidget]:
+        """构建下方音轨与视图区域。"""
+        track_area = QWidget()
+        track_area_layout = QVBoxLayout()
+        track_area_layout.setContentsMargins(0, 0, 0, 0)
+        track_area.setLayout(track_area_layout)
+        track_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        playback_control_area = self._build_playback_control_area()
+        track_area_layout.addWidget(playback_control_area)
+
+        self.view_stack = QStackedWidget()
+
+        self.sequence_widget = GridSequenceWidget(self.sequencer.get_bpm())
+        self.view_stack.addWidget(self.sequence_widget)
+
+        self.oscilloscope_widget = OscilloscopeWidget(
+            self.sequencer.audio_engine,
+            self.sequencer.get_bpm(),
+        )
+        self.view_stack.addWidget(self.oscilloscope_widget)
+        self.view_stack.setCurrentIndex(0)
+
+        track_area_layout.addWidget(self.view_stack, 1)
+        self.sequence_widget.add_track_button.clicked.connect(self.on_add_track_clicked)
+        return track_area, playback_control_area
+
+    def _configure_dock_widget(
+        self,
+        dock: QDockWidget,
+        *,
+        minimum_width: int,
+        visible: bool,
+        maximum_height: int | None = None,
+    ):
+        """统一配置右侧 Dock 的宽度策略和可见性。"""
+        dock.setMinimumWidth(minimum_width)
+        dock.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        if maximum_height is not None:
+            dock.setMaximumHeight(maximum_height)
+        dock.setVisible(visible)
+        dock.setFeatures(
+            QDockWidget.DockWidgetMovable
+            | QDockWidget.DockWidgetFloatable
+            | QDockWidget.DockWidgetClosable
+        )
+
+    def _build_side_docks(self):
+        """构建右侧 Dock 面板。"""
+        desktop = QApplication.desktop()
+        screen = desktop.screenGeometry()
+        max_height = int(screen.height() * 0.9)
+
+        self.property_dock = QDockWidget("属性面板", self)
+        self.property_panel = PropertyPanelWidget()
+        self.property_dock.setWidget(self.property_panel)
+        self.property_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.property_dock)
+        self._configure_dock_widget(
+            self.property_dock,
+            minimum_width=320,
+            visible=True,
+            maximum_height=max_height,
+        )
+
+        self.score_dock = QDockWidget("乐谱面板", self)
+        self.score_panel = ScoreLibraryWidget(self.score_library)
+        self.score_dock.setWidget(self.score_panel)
+        self.score_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.score_dock)
+        self._configure_dock_widget(
+            self.score_dock,
+            minimum_width=self.property_dock.minimumWidth(),
+            visible=False,
+        )
+
+        self.style_dock = QDockWidget("风格参数", self)
+        self.style_params_panel = StyleParamsWidget()
+        self.style_dock.setWidget(self.style_params_panel)
+        self.style_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.style_dock)
+        self._configure_dock_widget(
+            self.style_dock,
+            minimum_width=self.property_dock.minimumWidth(),
+            visible=False,
+        )
+
+        self.playback_settings_dock = QDockWidget("播放设置", self)
+        self.playback_settings_panel = PlaybackSettingsWidget()
+        self.playback_settings_dock.setWidget(self.playback_settings_panel)
+        self.playback_settings_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.playback_settings_dock)
+        self._configure_dock_widget(
+            self.playback_settings_dock,
+            minimum_width=self.property_dock.minimumWidth(),
+            visible=False,
+        )
+        self.playback_settings_panel.volume_ratios_changed.connect(
+            self.on_playback_volume_ratios_changed
+        )
+        self.playback_settings_panel.track_selection_changed.connect(
+            self.on_playback_track_selection_changed
+        )
+
+        self.bpm_editor_dock = QDockWidget("BPM编辑", self)
+        self.bpm_editor_panel = BPMEditorWidget()
+        self.bpm_editor_dock.setWidget(self.bpm_editor_panel)
+        self.bpm_editor_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.bpm_editor_dock)
+        self._configure_dock_widget(
+            self.bpm_editor_dock,
+            minimum_width=self.property_dock.minimumWidth(),
+            visible=False,
+        )
+        self.bpm_editor_panel.bpm_segments_changed.connect(self.on_bpm_segments_changed)
+
+        self.tabifyDockWidget(self.property_dock, self.score_dock)
+        self.tabifyDockWidget(self.property_dock, self.style_dock)
+        self.tabifyDockWidget(self.property_dock, self.playback_settings_dock)
+        self.tabifyDockWidget(self.property_dock, self.bpm_editor_dock)
+
+        self._right_dock_width = resolve_locked_dock_width(
+            self.property_dock.width(),
+            self.property_dock.minimumWidth(),
+        )
+        for dock in self._tracked_right_docks():
+            if dock is not None:
+                dock.setMinimumWidth(self._right_dock_width)
+                dock.setMaximumWidth(self._right_dock_width)
+                dock.installEventFilter(self)
+
+    def init_ui(self):
+        """初始化 UI。"""
+        self.setWindowTitle(APP_NAME)
+        desktop = QApplication.desktop()
+        screen = desktop.screenGeometry()
+        geometry = calculate_default_window_geometry(screen.width(), screen.height())
+        self.setGeometry(*geometry)
+
+        self._initial_window_size = self.size()
+        self.setMinimumSize(800, 600)
+
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        central_widget.setLayout(main_layout)
+
+        note_selection_area = self._build_editor_area()
+        main_layout.addWidget(note_selection_area, 1)
+
+        track_area, playback_control_area = self._build_track_area()
+        main_layout.addWidget(track_area, 1)
+
+        self._build_side_docks()
+        self.connect_signals()
+        self.apply_theme()
+        self.apply_display_settings_from_settings(
+            central_widget,
+            note_selection_area,
+            track_area,
+            playback_control_area,
+        )
+        self.refresh_ui()
+
+    def _add_action(
+        self,
+        target,
+        text: str,
+        handler,
+        *,
+        shortcut=None,
+        checkable: bool = False,
+        checked: bool | None = None,
+    ):
+        """创建并绑定一个 QAction。"""
+        action = QAction(text, self)
+        if shortcut is not None:
+            action.setShortcut(shortcut)
+        if checkable:
+            action.setCheckable(True)
+        if checked is not None:
+            action.setChecked(checked)
+        action.triggered.connect(handler)
+        target.addAction(action)
+        return action
+
+    def setup_menu(self):
+        """设置菜单栏。"""
+        menubar = self.menuBar()
+
+        file_menu = menubar.addMenu("文件(&F)")
+        self._add_action(file_menu, "新建(&N)", self.new_project, shortcut=QKeySequence.New)
+        self._add_action(
+            file_menu,
+            "打开/导入(&O)...",
+            self.open_or_import_file,
+            shortcut=QKeySequence.Open,
+        )
+        self._add_action(file_menu, "保存(&S)", self.save_project, shortcut=QKeySequence.Save)
+        self._add_action(file_menu, "导出(&E)...", self.export_file, shortcut=QKeySequence.SaveAs)
+        file_menu.addSeparator()
+        self._add_action(file_menu, "退出(&X)", self.close, shortcut=QKeySequence.Quit)
+
+        view_menu = menubar.addMenu("视图(&V)")
+        self.toggle_property_action = self._add_action(
+            view_menu,
+            "属性面板(&P)",
+            self.toggle_property_panel,
+            checkable=True,
+            checked=False,
+        )
+        self.toggle_score_action = self._add_action(
+            view_menu,
+            "乐谱面板(&L)",
+            self.toggle_score_panel,
+            checkable=True,
+            checked=False,
+        )
+        self.toggle_style_params_action = self._add_action(
+            view_menu,
+            "风格参数(&S)",
+            self.toggle_style_params_panel,
+            checkable=True,
+            checked=False,
+        )
+        self.toggle_playback_settings_action = self._add_action(
+            view_menu,
+            "播放设置(&B)",
+            self.toggle_playback_settings_panel,
+            checkable=True,
+            checked=False,
+        )
+        self.toggle_bpm_editor_action = self._add_action(
+            view_menu,
+            "BPM编辑(&T)",
+            self.toggle_bpm_editor_panel,
+            checkable=True,
+            checked=False,
+        )
+
+        edit_menu = menubar.addMenu("编辑(&E)")
+        self.undo_action = self._add_action(
+            edit_menu,
+            "撤销(&U)",
+            self.undo,
+            shortcut=QKeySequence.Undo,
+        )
+        self.undo_action.setEnabled(False)
+        self.redo_action = self._add_action(
+            edit_menu,
+            "重做(&R)",
+            self.redo,
+            shortcut=QKeySequence.Redo,
+        )
+        self.redo_action.setEnabled(False)
+
+        self.update_undo_redo_timer = QTimer()
+        self.update_undo_redo_timer.timeout.connect(self.update_undo_redo_state)
+        self.update_undo_redo_timer.start(100)
+
+        edit_menu.addSeparator()
+        self._add_action(
+            edit_menu,
+            "全选(&A)",
+            self.select_all_notes,
+            shortcut=QKeySequence.SelectAll,
+        )
+
+        play_menu = menubar.addMenu("播放(&P)")
+        self._add_action(play_menu, "播放/暂停", self.toggle_play_pause, shortcut=Qt.Key_Space)
+        self._add_action(play_menu, "停止(&S)", self.stop, shortcut="Ctrl+.")
+
+        self._add_action(menubar, "生成(&G)", self.generate_music_from_seed)
+        self._add_action(menubar, "设置(&S)", self.show_settings)
+
+        help_menu = menubar.addMenu("帮助(&H)")
+        self._add_action(help_menu, "关于(&A)...", self.show_about)
+
+    def setup_toolbar(self):
+        """设置工具栏（已移到右侧面板，这里保留空实现）。"""
+        pass
+
+    def setup_statusbar(self):
+        """设置状态栏。"""
+        self.statusBar().showMessage("就绪")
+
+    def check_unsaved_changes(self) -> bool:
+        """检查未保存的更改（简化实现）。"""
+        return True
+
+    def closeEvent(self, event):
+        """窗口关闭事件。"""
+        if self.check_unsaved_changes():
+            self.sequencer.cleanup()
+            event.accept()
+        else:
+            event.ignore()

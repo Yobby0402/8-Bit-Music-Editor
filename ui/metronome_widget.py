@@ -4,9 +4,9 @@
 显示节拍器状态和可视化指示器。
 """
 
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QPainter, QColor, QPen, QBrush
+from PyQt5.QtCore import QTimer, pyqtSignal
+from PyQt5.QtGui import QBrush, QColor, QPainter, QPen
+from PyQt5.QtWidgets import QHBoxLayout, QPushButton, QWidget
 
 
 class MetronomeWidget(QWidget):

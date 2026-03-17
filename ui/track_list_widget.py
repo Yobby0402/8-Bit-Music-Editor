@@ -4,13 +4,18 @@
 显示和管理多个轨道。
 """
 
-from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLabel, QSlider, QCheckBox, QComboBox, QListWidget,
-    QListWidgetItem
-)
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QMouseEvent
+from PyQt5.QtGui import QMouseEvent
+from PyQt5.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
+)
 
 from core.models import Track, WaveformType
 

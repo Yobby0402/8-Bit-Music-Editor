@@ -4,12 +4,18 @@
 用于设置每个音轨在播放时的音量占比，支持多选统一设置。
 """
 
-from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QSlider, QPushButton, QCheckBox, QScrollArea, QSpinBox
-)
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QFont
+from PyQt5.QtWidgets import (
+    QCheckBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QSlider,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from core.models import Track
 
@@ -127,52 +133,73 @@ class PlaybackSettingsWidget(QWidget):
     def create_track_volume_widget(self, track: Track, track_id: int) -> QWidget:
         """为单个音轨创建音量占比控件"""
         widget = QWidget()
-        layout = QHBoxLayout()
-        layout.setContentsMargins(4, 4, 4, 4)
-        widget.setLayout(layout)
+        # 使用垂直布局，包含两行
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(4, 4, 4, 4)
+        main_layout.setSpacing(4)
+        widget.setLayout(main_layout)
+        
+        # 获取当前占比（如果没有设置，默认为100%）
+        current_ratio = self.track_volume_ratios.get(track_id, 1.0)
+        
+        # 第一行：选择框、名称、主音按钮
+        first_row = QHBoxLayout()
+        first_row.setContentsMargins(0, 0, 0, 0)
+        first_row.setSpacing(8)
         
         # 多选复选框
         checkbox = QCheckBox()
         checkbox.setChecked(track_id in self.selected_track_ids)
         checkbox.stateChanged.connect(lambda state, tid=track_id: self.on_track_selected(tid, state == Qt.Checked))
-        layout.addWidget(checkbox)
+        first_row.addWidget(checkbox)
         
         # 音轨名称
         name_label = QLabel(track.name)
         name_label.setMinimumWidth(100)
-        name_label.setMaximumWidth(120)
         # 如果是主音轨，加粗显示
         if track_id in self.track_volume_ratios and self.track_volume_ratios[track_id] > 0.7:
             font = name_label.font()
             font.setBold(True)
             name_label.setFont(font)
-        layout.addWidget(name_label)
+        first_row.addWidget(name_label)
         
-        # 音量占比滑块
-        slider = QSlider(Qt.Horizontal)
-        slider.setRange(0, 100)
-        # 获取当前占比（如果没有设置，默认为100%）
-        current_ratio = self.track_volume_ratios.get(track_id, 1.0)
-        slider.setValue(int(current_ratio * 100))
-        slider.valueChanged.connect(lambda v, tid=track_id: self.on_ratio_changed(tid, v))
-        layout.addWidget(slider, 1)
-        
-        # 占比显示标签
-        ratio_label = QLabel(f"{int(current_ratio * 100)}%")
-        ratio_label.setMinimumWidth(45)
-        ratio_label.setMaximumWidth(45)
-        ratio_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(ratio_label)
+        first_row.addStretch()  # 添加弹性空间
         
         # 主音按钮（快速设置为100%）
         main_button = QPushButton("主音")
         main_button.setCheckable(True)
-        main_button.setMaximumWidth(50)
+        main_button.setMinimumWidth(50)
+        main_button.setMaximumWidth(60)
         if current_ratio >= 0.95:  # 如果占比接近100%，视为主音
             main_button.setChecked(True)
+        first_row.addWidget(main_button)
+        
+        main_layout.addLayout(first_row)
+        
+        # 第二行：滑条和占比显示标签
+        second_row = QHBoxLayout()
+        second_row.setContentsMargins(0, 0, 0, 0)
+        second_row.setSpacing(8)
+        
+        # 音量占比滑块
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(0, 100)
+        slider.setValue(int(current_ratio * 100))
+        slider.valueChanged.connect(lambda v, tid=track_id: self.on_ratio_changed(tid, v))
+        second_row.addWidget(slider, 1)  # 滑条占据剩余空间
+        
+        # 占比显示标签
+        ratio_label = QLabel(f"{int(current_ratio * 100)}%")
+        ratio_label.setMinimumWidth(45)
+        ratio_label.setMaximumWidth(50)
+        ratio_label.setAlignment(Qt.AlignCenter)
+        second_row.addWidget(ratio_label)
+        
+        main_layout.addLayout(second_row)
+        
+        # 连接主音按钮（在所有控件创建完成后）
         main_button.clicked.connect(lambda checked, tid=track_id, s=slider, rl=ratio_label: 
                                    self.on_main_clicked(checked, tid, s, rl))
-        layout.addWidget(main_button)
         
         # 保存引用
         self.track_widgets[track_id] = {

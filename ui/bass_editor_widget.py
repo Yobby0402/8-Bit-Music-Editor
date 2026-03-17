@@ -4,14 +4,11 @@
 用于添加低音事件。
 """
 
-from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QComboBox, QButtonGroup
-)
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtWidgets import QButtonGroup, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from ui.piano_keyboard_widget import PianoKeyboardWidget
 from core.models import WaveformType
+from ui.piano_keyboard_widget import PianoKeyboardWidget
 
 
 class BassEditorWidget(QWidget):

@@ -5,10 +5,9 @@
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Optional, Any, Dict
-import copy
+from typing import Any, Dict, List, Optional
 
-from .models import Project, Track, Note, WaveformType, ADSRParams
+from .models import ADSRParams, Note, Track
 
 
 class Command(ABC):

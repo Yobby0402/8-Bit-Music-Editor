@@ -6,7 +6,8 @@
 
 import json
 import os
-from typing import Dict, Any
+from typing import Any, Dict
+
 from PyQt5.QtCore import QObject
 from PyQt5.QtWidgets import QApplication
 

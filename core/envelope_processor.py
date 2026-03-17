@@ -4,8 +4,9 @@
 提供ADSR包络和音高包络的处理功能。
 """
 
-import numpy as np
 from typing import Optional
+
+import numpy as np
 
 from .models import ADSRParams
 

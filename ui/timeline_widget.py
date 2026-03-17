@@ -4,9 +4,9 @@
 显示时间轴、播放头和网格。支持点击和拖动来设置播放线位置。
 """
 
-from PyQt5.QtWidgets import QWidget, QHBoxLayout, QLabel
-from PyQt5.QtCore import Qt, pyqtSignal, QPoint
-from PyQt5.QtGui import QPainter, QPen, QColor, QMouseEvent
+from PyQt5.QtCore import QPoint, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QMouseEvent, QPainter, QPen
+from PyQt5.QtWidgets import QWidget
 
 from ui.theme import theme_manager
 

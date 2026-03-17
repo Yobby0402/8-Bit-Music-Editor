@@ -6,11 +6,10 @@
 
 import numpy as np
 import pygame
-from scipy.io import wavfile
 
-from core.waveform_generator import WaveformGenerator
 from core.envelope_processor import EnvelopeProcessor
 from core.models import ADSRParams
+from core.waveform_generator import WaveformGenerator
 
 
 def play_audio(audio_data: np.ndarray, sample_rate: int = 44100):

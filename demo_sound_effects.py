@@ -4,14 +4,14 @@
 生成并播放各种游戏音效，也可以保存为WAV文件。
 """
 
-import numpy as np
-from scipy.io import wavfile
-import pygame
-import time
 
-from core.waveform_generator import WaveformGenerator
+import numpy as np
+import pygame
+from scipy.io import wavfile
+
 from core.envelope_processor import EnvelopeProcessor
-from core.models import WaveformType, ADSRParams
+from core.models import ADSRParams
+from core.waveform_generator import WaveformGenerator
 
 
 class SoundEffectGenerator:
@@ -193,8 +193,6 @@ class SoundEffectGenerator:
         wave = (wave1 + wave2) / 2
         
         # 频率下降
-        t = np.linspace(0, duration, len(wave), False)
-        freq_envelope = np.linspace(1.0, 0.7, len(wave))
         # 简化处理：应用音量包络模拟频率下降
         adsr = ADSRParams(attack=0.01, decay=0.1, sustain=0.3, release=0.09)
         envelope = self.envelope_proc.generate_adsr_envelope(duration, adsr)

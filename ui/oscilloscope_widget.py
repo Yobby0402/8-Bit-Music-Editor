@@ -5,14 +5,15 @@
 波形从左侧生成，向右移动到蜂鸣器，到达蜂鸣器时才播放。
 """
 
-import numpy as np
-from typing import List, Optional, Tuple
-from PyQt5.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QSpinBox
-from PyQt5.QtCore import Qt, QTimer, QRect
-from PyQt5.QtGui import QPainter, QPen, QColor, QFont
+from typing import List, Tuple
 
-from core.models import Track, TrackType, Note
+import numpy as np
+from PyQt5.QtCore import QRect, Qt
+from PyQt5.QtGui import QColor, QFont, QPainter, QPen
+from PyQt5.QtWidgets import QWidget
+
 from core.audio_engine import AudioEngine
+from core.models import Note, Track, TrackType
 from ui.theme import theme_manager
 
 
@@ -422,8 +423,6 @@ class OscilloscopeWidget(QWidget):
         
         # 计算波形从左侧移动到蜂鸣器需要的时间
         # 蜂鸣器在波形区域的右侧（waveform_area_width 位置）
-        time_to_buzzer = waveform_area_width / self.waveform_speed
-        
         # 所有波形都从位置0（最左边）开始生成
         # 波形的起始位置：从0开始，向右移动
         # 当 time_offset = time_to_buzzer 时，波形到达蜂鸣器（x_start = 0）

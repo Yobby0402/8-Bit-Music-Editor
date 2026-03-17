@@ -1,11 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from app_info import APP_NAME
+
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('data', 'data')],
+    datas=[],
     hiddenimports=['PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets', 'numpy', 'scipy', 'scipy.io', 'scipy.io.wavfile', 'pygame', 'soundfile', 'mido', 'mido.backends'],
     hookspath=[],
     hooksconfig={},
@@ -22,7 +24,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='8bit音乐制作器',
+    name=APP_NAME,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

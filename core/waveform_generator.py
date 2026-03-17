@@ -4,9 +4,8 @@
 提供各种波形的生成功能：方波、三角波、锯齿波、正弦波、噪声波。
 """
 
+
 import numpy as np
-from typing import Optional
-from enum import Enum
 
 from .models import WaveformType
 
@@ -166,7 +165,6 @@ class WaveformGenerator:
             white_noise = np.random.uniform(-1, 1, num_samples)
             # 简单的低通滤波模拟粉噪声
             b = [0.049922035, -0.095993537, 0.050612699, -0.004408786]
-            a = [1, -2.494956002, 2.017265875, -0.522189400]
             noise = np.convolve(white_noise, b, mode='same')
             noise = noise / np.max(np.abs(noise))  # 归一化
         else:
