@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Sequence
 
 from PyQt5.QtCore import QTimer
@@ -12,9 +13,9 @@ from PyQt5.QtCore import QTimer
 from core.models import Track
 from ui.main_window_view_ops import filter_render_tracks, get_enabled_tracks
 
-OSC_REFRESH_BPM_ONLY = "bpm_only"
 OSC_REFRESH_CLEAR = "clear"
 OSC_REFRESH_RENDER = "render"
+UI_REFRESH_PROFILE_THRESHOLD_MS = 100.0
 
 
 @dataclass(frozen=True)
@@ -36,7 +37,12 @@ def build_oscilloscope_refresh_plan(
     if user_selected_tracks:
         filtered_tracks = filter_render_tracks(user_selected_tracks, enabled_tracks)
         if filtered_tracks:
-            return OscilloscopeRefreshPlan(OSC_REFRESH_BPM_ONLY, [])
+            resolved_tracks = list(filtered_tracks)
+            return OscilloscopeRefreshPlan(
+                OSC_REFRESH_RENDER,
+                resolved_tracks,
+                selected_tracks_override=resolved_tracks,
+            )
         return OscilloscopeRefreshPlan(OSC_REFRESH_CLEAR, [])
 
     if not enabled_tracks:
@@ -63,6 +69,35 @@ def build_oscilloscope_refresh_plan(
 
 class MainWindowRefreshOpsMixin:
     """承载 MainWindow 中的信号连接、播放头同步与整页刷新逻辑。"""
+
+    def _log_refreshable_widgets_profile(
+        self,
+        *,
+        preserve_selection: bool,
+        force_full_refresh: bool,
+        **stage_timings_ms: float,
+    ) -> None:
+        """Print a stage breakdown when a full UI refresh is slow."""
+        total_ms = sum(stage_timings_ms.values())
+        if total_ms < UI_REFRESH_PROFILE_THRESHOLD_MS:
+            return
+
+        project = self.sequencer.project
+        track_count = len(project.tracks)
+        note_count = sum(len(track.notes) for track in project.tracks)
+        stage_parts = " ".join(
+            f"{name}={elapsed_ms:.1f}ms"
+            for name, elapsed_ms in stage_timings_ms.items()
+        )
+        print(
+            "[PROFILE] ui.refresh_widgets "
+            f"total={total_ms:.1f}ms "
+            f"{stage_parts} "
+            f"track_count={track_count} "
+            f"note_count={note_count} "
+            f"preserve_selection={preserve_selection} "
+            f"force_full_refresh={force_full_refresh}"
+        )
 
     def connect_signals(self):
         """连接信号。"""
@@ -104,27 +139,185 @@ class MainWindowRefreshOpsMixin:
 
     def _update_refreshable_widgets(self, preserve_selection: bool, force_full_refresh: bool):
         """刷新序列编辑器、统一编辑器和各类面板。"""
+        project = self.sequencer.project
+        tracks = project.tracks
+        bpm = self.sequencer.get_bpm()
+
+        stage_started_at = perf_counter()
+        if hasattr(self.sequence_widget, "set_project"):
+            self.sequence_widget.set_project(project)
+        if hasattr(self, "property_panel") and hasattr(self.property_panel, "set_project"):
+            self.property_panel.set_project(project)
+        project_binding_ms = (perf_counter() - stage_started_at) * 1000.0
+
+        stage_started_at = perf_counter()
         self.sequence_widget.set_tracks(
-            self.sequencer.project.tracks,
+            tracks,
             preserve_selection=preserve_selection,
+            refresh=False,
         )
-        self.sequence_widget.set_bpm(self.sequencer.get_bpm())
+        set_tracks_ms = (perf_counter() - stage_started_at) * 1000.0
 
-        if force_full_refresh:
-            self.sequence_widget.refresh(force_full_refresh=True)
+        stage_started_at = perf_counter()
+        self.sequence_widget.set_bpm(bpm, refresh=False)
+        set_bpm_ms = (perf_counter() - stage_started_at) * 1000.0
 
+        stage_started_at = perf_counter()
+        self.sequence_widget.refresh(force_full_refresh=force_full_refresh)
+        sequence_refresh_ms = (perf_counter() - stage_started_at) * 1000.0
+
+        stage_started_at = perf_counter()
+        if hasattr(self.sequence_widget, "progress_bar"):
+            total_duration = project.get_total_duration()
+            self.sequence_widget.progress_bar.set_total_time(total_duration)
+        progress_bar_ms = (perf_counter() - stage_started_at) * 1000.0
+
+        stage_started_at = perf_counter()
+        self.unified_editor.set_bpm(bpm)
+        unified_editor_ms = (perf_counter() - stage_started_at) * 1000.0
+
+        stage_started_at = perf_counter()
+        if hasattr(self, "playback_settings_panel"):
+            if hasattr(self.playback_settings_panel, "set_state"):
+                self.playback_settings_panel.set_state(
+                    tracks,
+                    self.sequencer.playback_volume_ratios,
+                )
+            else:
+                self.playback_settings_panel.set_tracks(tracks)
+                self.playback_settings_panel.set_volume_ratios(
+                    self.sequencer.playback_volume_ratios
+                )
+        playback_settings_ms = (perf_counter() - stage_started_at) * 1000.0
+
+        stage_started_at = perf_counter()
+        if hasattr(self, "bpm_editor_panel"):
+            self.bpm_editor_panel.set_project(project)
+        bpm_editor_ms = (perf_counter() - stage_started_at) * 1000.0
+
+        self._log_refreshable_widgets_profile(
+            preserve_selection=preserve_selection,
+            force_full_refresh=force_full_refresh,
+            project_binding_ms=project_binding_ms,
+            set_tracks_ms=set_tracks_ms,
+            set_bpm_ms=set_bpm_ms,
+            sequence_refresh_ms=sequence_refresh_ms,
+            progress_bar_ms=progress_bar_ms,
+            unified_editor_ms=unified_editor_ms,
+            playback_settings_ms=playback_settings_ms,
+            bpm_editor_ms=bpm_editor_ms,
+        )
+
+    def _update_sequence_duration_widgets(self):
+        """Update lightweight timeline widgets after local note edits."""
         if hasattr(self.sequence_widget, "progress_bar"):
             total_duration = self.sequencer.project.get_total_duration()
             self.sequence_widget.progress_bar.set_total_time(total_duration)
 
-        self.unified_editor.set_bpm(self.sequencer.get_bpm())
+    def _is_oscilloscope_view_active(self) -> bool:
+        """Return whether waveform view is currently active."""
+        return hasattr(self, "view_stack") and self.view_stack.currentIndex() == 1
+
+    def _refresh_note_related_views(self) -> None:
+        """Keep secondary note views in sync after local sequence updates."""
+        if self._is_oscilloscope_view_active() and hasattr(self, "_refresh_oscilloscope_widget"):
+            self._refresh_oscilloscope_widget()
+
+    def _can_use_lightweight_note_refresh(self, track: Track | None = None) -> bool:
+        """Return whether the current UI state can use local block sync instead of full refresh."""
+        if not hasattr(self, "sequence_widget") or not hasattr(self.sequence_widget, "sync_note_block"):
+            return False
+        if track is None:
+            return True
+        if track not in getattr(self.sequence_widget, "tracks", []):
+            return False
+        track_index = self.sequence_widget.tracks.index(track)
+        return track_index < len(getattr(self.sequence_widget, "track_groups", []))
+
+    def _sync_note_block_ui(self, note, track, *, highlight_track: bool = False) -> bool:
+        """Update a single note block and lightweight timeline widgets."""
+        if not self._can_use_lightweight_note_refresh(track):
+            return False
+        if not self.sequence_widget.sync_note_block(note, track):
+            return False
+        self._update_sequence_duration_widgets()
+        if highlight_track:
+            self.sequence_widget.set_highlighted_track(track)
+        return True
+
+    def _sync_note_blocks_ui(self, notes_and_tracks: list[tuple[object, Track]]) -> bool:
+        """Update multiple note blocks with one lightweight widget pass."""
+        if not notes_and_tracks:
+            return False
+        if not self._can_use_lightweight_note_refresh():
+            return False
+        if not hasattr(self.sequence_widget, "sync_note_blocks"):
+            return False
+        if not all(self._can_use_lightweight_note_refresh(track) for _, track in notes_and_tracks):
+            return False
+        if not self.sequence_widget.sync_note_blocks(notes_and_tracks):
+            return False
+        self._update_sequence_duration_widgets()
+        return True
+
+    def _remove_note_block_ui(self, note, track) -> bool:
+        """Remove a single note block and lightweight timeline widgets."""
+        if not self._can_use_lightweight_note_refresh(track):
+            return False
+        if not self.sequence_widget.remove_note_block(note, track):
+            return False
+        self._update_sequence_duration_widgets()
+        return True
+
+    def _remove_note_blocks_ui(self, notes_and_tracks: list[tuple[object, Track]]) -> bool:
+        """Remove multiple note blocks with one lightweight widget pass."""
+        if not notes_and_tracks:
+            return False
+        if not self._can_use_lightweight_note_refresh():
+            return False
+        if not hasattr(self.sequence_widget, "remove_note_blocks"):
+            return False
+        if not all(self._can_use_lightweight_note_refresh(track) for _, track in notes_and_tracks):
+            return False
+        if not self.sequence_widget.remove_note_blocks(notes_and_tracks):
+            return False
+        self._update_sequence_duration_widgets()
+        return True
+
+    def _sync_track_ui(self, track: Track) -> bool:
+        """Refresh track labels and related panels without rebuilding the scene."""
+        handled = False
+
+        if (
+            hasattr(self, "sequence_widget")
+            and hasattr(self.sequence_widget, "sync_track_presentation")
+            and self.sequence_widget.sync_track_presentation(track)
+        ):
+            handled = True
+
+        if hasattr(self, "property_panel"):
+            if getattr(self.property_panel, "current_track_for_edit", None) is track:
+                self.property_panel.set_track(track)
+                handled = True
 
         if hasattr(self, "playback_settings_panel"):
-            self.playback_settings_panel.set_tracks(self.sequencer.project.tracks)
-            self.playback_settings_panel.set_volume_ratios(self.sequencer.playback_volume_ratios)
+            if hasattr(self.playback_settings_panel, "set_state"):
+                self.playback_settings_panel.set_state(
+                    self.sequencer.project.tracks,
+                    self.sequencer.playback_volume_ratios,
+                )
+            else:
+                self.playback_settings_panel.set_tracks(self.sequencer.project.tracks)
+                self.playback_settings_panel.set_volume_ratios(
+                    self.sequencer.playback_volume_ratios
+                )
+            handled = True
 
-        if hasattr(self, "bpm_editor_panel"):
-            self.bpm_editor_panel.set_project(self.sequencer.project)
+        if hasattr(self, "_refresh_oscilloscope_widget"):
+            self._refresh_oscilloscope_widget()
+            handled = True
+
+        return handled
 
     def _refresh_oscilloscope_widget(self):
         """根据当前视图和选择状态刷新示波器。"""
@@ -148,12 +341,9 @@ class MainWindowRefreshOpsMixin:
             selected_track,
         )
 
-        if plan.action == OSC_REFRESH_BPM_ONLY:
-            self.oscilloscope_widget.set_bpm(bpm)
-            return
-
         if plan.action == OSC_REFRESH_CLEAR:
-            self.oscilloscope_widget.set_tracks([])
+            if getattr(self.oscilloscope_widget, "tracks", []):
+                self.oscilloscope_widget.set_tracks([])
             self.oscilloscope_widget.set_bpm(bpm)
             return
 

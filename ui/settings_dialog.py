@@ -393,13 +393,27 @@ class SettingsDialog(QDialog):
         refresh_layout.addWidget(self.playhead_refresh_spinbox)
         refresh_layout.addStretch()
         layout.addLayout(refresh_layout)
+
+        playback_view_layout = QHBoxLayout()
+        playback_view_label = QLabel("播放显示模式:")
+        playback_view_layout.addWidget(playback_view_label)
+        self.playback_view_mode_combo = QComboBox()
+        self.playback_view_mode_combo.addItem("播放线移动，到边缘后滚屏", "moving_playhead")
+        self.playback_view_mode_combo.addItem("播放线固定，音符向左滚动", "fixed_playhead")
+        current_view_mode = self.settings_manager.get_playback_view_mode()
+        current_index = self.playback_view_mode_combo.findData(current_view_mode)
+        self.playback_view_mode_combo.setCurrentIndex(max(0, current_index))
+        playback_view_layout.addWidget(self.playback_view_mode_combo)
+        playback_view_layout.addStretch()
+        layout.addLayout(playback_view_layout)
         
         # 说明文字
         info_label = QLabel(
             "说明：\n"
             " - 吸附到节拍网格：在拖动音符、移动播放线等操作时，对齐到最近的 1/4 拍位置。\n"
             " - 允许重叠：关闭时，在网格中拖动或导入时将尽量避免音符交叠；开启则保留叠音和和弦结构。\n"
-            " - 重叠音符堆叠显示：仅影响显示方式，开启后相同位置的音符会在垂直方向上错位摞起，方便查看。"
+            " - 重叠音符堆叠显示：仅影响显示方式，开启后相同位置的音符会在垂直方向上错位摞起，方便查看。\n"
+            " - 播放显示模式：可选择让播放线移动，或固定播放线并让音符向左滚动。"
         )
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
@@ -532,6 +546,10 @@ class SettingsDialog(QDialog):
             self.velocity_opacity_checkbox.setChecked(self.settings_manager.is_velocity_opacity_enabled())
         if hasattr(self, "playhead_refresh_spinbox"):
             self.playhead_refresh_spinbox.setValue(self.settings_manager.get_playhead_refresh_interval())
+        if hasattr(self, "playback_view_mode_combo"):
+            current_view_mode = self.settings_manager.get_playback_view_mode()
+            current_index = self.playback_view_mode_combo.findData(current_view_mode)
+            self.playback_view_mode_combo.setCurrentIndex(max(0, current_index))
 
         # 重新加载快捷键表
         self.load_shortcuts_to_table()
@@ -713,6 +731,8 @@ class SettingsDialog(QDialog):
             self.settings_manager.set_velocity_opacity_enabled(self.velocity_opacity_checkbox.isChecked())
         if hasattr(self, "playhead_refresh_spinbox"):
             self.settings_manager.set_playhead_refresh_interval(self.playhead_refresh_spinbox.value())
+        if hasattr(self, "playback_view_mode_combo"):
+            self.settings_manager.set_playback_view_mode(self.playback_view_mode_combo.currentData())
         
         # 立即应用字体（字体族 + 大小，全局），并统一全局调色板背景
         try:

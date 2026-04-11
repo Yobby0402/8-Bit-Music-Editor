@@ -1,8 +1,6 @@
-"""
-轨道事件模型
+"""Track event models shared by the sequencer and UI."""
 
-定义不同类型的轨道事件：音符（主旋律）、低音事件、打击乐事件。
-"""
+from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
@@ -12,90 +10,108 @@ from .models import ADSRParams, WaveformType
 
 
 class DrumType(Enum):
-    """打击乐类型"""
-    KICK = "kick"      # 底鼓
-    SNARE = "snare"    # 军鼓
-    HIHAT = "hihat"    # 踩镲
-    CRASH = "crash"    # 吊镲
+    """Supported drum event kinds."""
+
+    KICK = "kick"
+    SNARE = "snare"
+    HIHAT = "hihat"
+    CRASH = "crash"
 
 
 @dataclass
 class BassEvent:
-    """低音事件（不是音符，是低音线）"""
-    pitch: int              # MIDI音高（0-127）
-    start_beat: float       # 开始节拍位置（节拍数，不是秒）
-    duration_beats: float    # 持续节拍数
-    velocity: int = 127     # 力度
+    """Bass event stored on the musical timeline."""
+
+    pitch: int
+    start_beat: float
+    duration_beats: float
+    velocity: int = 127
     waveform: WaveformType = WaveformType.TRIANGLE
     adsr: Optional[ADSRParams] = None
-    
+
     def __post_init__(self):
         if self.adsr is None:
-            from .models import ADSRParams
             self.adsr = ADSRParams()
-    
+
     @property
     def end_beat(self) -> float:
-        """结束节拍位置"""
         return self.start_beat + self.duration_beats
-    
+
+    def get_start_tick(self, project) -> int:
+        """Return the event start tick in the project's standard timebase."""
+        return project.beats_to_ticks(self.start_beat)
+
+    def get_duration_ticks(self, project) -> int:
+        """Return the event duration in ticks."""
+        return max(0, project.beats_to_ticks(self.duration_beats))
+
+    def apply_tick_timing(self, project, start_tick: int, duration_ticks: int) -> None:
+        """Update beat timing from standard tick timing."""
+        self.start_beat = project.ticks_to_beats(start_tick)
+        self.duration_beats = project.ticks_to_beats(max(0, duration_ticks))
+
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
         return {
             "pitch": self.pitch,
             "start_beat": self.start_beat,
             "duration_beats": self.duration_beats,
             "velocity": self.velocity,
             "waveform": self.waveform.value,
-            "adsr": self.adsr.to_dict() if self.adsr else None
+            "adsr": self.adsr.to_dict() if self.adsr else None,
         }
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'BassEvent':
-        """从字典创建"""
-        adsr = None
-        if data.get("adsr"):
-            adsr = ADSRParams.from_dict(data["adsr"])
-        
+    def from_dict(cls, data: Dict[str, Any]) -> "BassEvent":
+        adsr = ADSRParams.from_dict(data["adsr"]) if data.get("adsr") else None
         return cls(
             pitch=data["pitch"],
             start_beat=data["start_beat"],
             duration_beats=data["duration_beats"],
             velocity=data.get("velocity", 127),
             waveform=WaveformType(data.get("waveform", "triangle")),
-            adsr=adsr
+            adsr=adsr,
         )
 
 
 @dataclass
 class DrumEvent:
-    """打击乐事件"""
-    drum_type: DrumType      # 打击乐类型
-    start_beat: float        # 开始节拍位置
-    duration_beats: float    # 持续节拍数（通常很短）
-    velocity: int = 127      # 力度
-    
+    """Drum event stored on the musical timeline."""
+
+    drum_type: DrumType
+    start_beat: float
+    duration_beats: float
+    velocity: int = 127
+
     @property
     def end_beat(self) -> float:
-        """结束节拍位置"""
         return self.start_beat + self.duration_beats
-    
+
+    def get_start_tick(self, project) -> int:
+        """Return the drum event start tick in the project's standard timebase."""
+        return project.beats_to_ticks(self.start_beat)
+
+    def get_duration_ticks(self, project) -> int:
+        """Return the drum event duration in ticks."""
+        return max(0, project.beats_to_ticks(self.duration_beats))
+
+    def apply_tick_timing(self, project, start_tick: int, duration_ticks: int) -> None:
+        """Update beat timing from standard tick timing."""
+        self.start_beat = project.ticks_to_beats(start_tick)
+        self.duration_beats = project.ticks_to_beats(max(0, duration_ticks))
+
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
         return {
             "drum_type": self.drum_type.value,
             "start_beat": self.start_beat,
             "duration_beats": self.duration_beats,
-            "velocity": self.velocity
+            "velocity": self.velocity,
         }
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'DrumEvent':
-        """从字典创建"""
+    def from_dict(cls, data: Dict[str, Any]) -> "DrumEvent":
         return cls(
             drum_type=DrumType(data["drum_type"]),
             start_beat=data["start_beat"],
             duration_beats=data["duration_beats"],
-            velocity=data.get("velocity", 127)
+            velocity=data.get("velocity", 127),
         )
-

@@ -8,6 +8,22 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from .musical_time import (
+    DEFAULT_PPQN,
+    TempoEvent,
+    build_tempo_regions,
+    seconds_to_ticks_with_regions,
+    tempo_event_rows_to_segments,
+    tempo_events_from_bpm_segments,
+    ticks_to_seconds_with_regions,
+)
+from .musical_time import (
+    beats_to_ticks as musical_beats_to_ticks,
+)
+from .musical_time import (
+    ticks_to_beats as musical_ticks_to_beats,
+)
+
 if TYPE_CHECKING:
     from .effect_processor import DelayParams, FilterParams, TremoloParams, VibratoParams
     from .track_events import DrumEvent
@@ -26,6 +42,52 @@ class TrackType(Enum):
     """音轨类型枚举"""
     NOTE_TRACK = "note"    # 音符音轨（主旋律/低音）
     DRUM_TRACK = "drum"    # 打击乐音轨
+
+
+class TrackRole(Enum):
+    """音符音轨的语义角色枚举。"""
+    MELODY = "melody"
+    BASS = "bass"
+    HARMONY = "harmony"
+    EFFECT = "effect"
+
+
+LEGACY_TRACK_ROLE_KEYWORDS: dict[TrackRole, tuple[str, ...]] = {
+    TrackRole.MELODY: ("主旋律", "melody", "lead"),
+    TrackRole.BASS: ("低音", "bass"),
+    TrackRole.HARMONY: ("和声", "harmony", "pad", "chord"),
+    TrackRole.EFFECT: ("效果", "effect", "fx", "sfx"),
+}
+
+
+def infer_track_role(name: str | None, track_type: TrackType | None) -> Optional[TrackRole]:
+    """基于旧项目的音轨名称推断角色。"""
+    if track_type == TrackType.DRUM_TRACK:
+        return None
+
+    normalized_name = (name or "").strip().lower()
+    for role, keywords in LEGACY_TRACK_ROLE_KEYWORDS.items():
+        if any(keyword in normalized_name for keyword in keywords):
+            return role
+    return TrackRole.MELODY
+
+
+def normalize_track_role(
+    role: TrackRole | str | None,
+    name: str | None,
+    track_type: TrackType | None,
+) -> Optional[TrackRole]:
+    """规范化 role 字段，并兼容旧项目未显式保存角色的情况。"""
+    if track_type == TrackType.DRUM_TRACK:
+        return None
+    if isinstance(role, TrackRole):
+        return role
+    if isinstance(role, str):
+        normalized_role = role.strip().lower()
+        for candidate in TrackRole:
+            if candidate.value == normalized_role:
+                return candidate
+    return infer_track_role(name, track_type)
 
 
 @dataclass
@@ -100,6 +162,8 @@ class Note:
     pitch: int              # MIDI音高（0-127），0表示休止符（空白音符）
     start_time: float       # 开始时间（秒）- 仅用于运行时，不存储到JSON
     duration: float         # 持续时间（秒）- 仅用于运行时，不存储到JSON
+    start_tick: Optional[int] = None  # 标准时间模型中的开始tick
+    duration_ticks: Optional[int] = None  # 标准时间模型中的持续tick
     velocity: int = 127     # 力度/音量（0-127）
     waveform: WaveformType = WaveformType.SQUARE  # 波形类型
     duty_cycle: float = 0.5  # 占空比（仅用于方波，0-1）
@@ -133,6 +197,10 @@ class Note:
                 "depth": self.vibrato_params.depth,
                 "enabled": self.vibrato_params.enabled
             }
+        if self.start_tick is not None:
+            result["start_tick"] = self.start_tick
+        if self.duration_ticks is not None:
+            result["duration_ticks"] = self.duration_ticks
         return result
     
     def to_dict_sequence(self) -> Dict[str, Any]:
@@ -192,6 +260,8 @@ class Note:
             pitch=data["pitch"],
             start_time=data["start_time"],
             duration=data["duration"],
+            start_tick=data.get("start_tick"),
+            duration_ticks=data.get("duration_ticks"),
             velocity=data.get("velocity", 127),
             waveform=WaveformType(data.get("waveform", "square")),
             duty_cycle=data.get("duty_cycle", 0.5),
@@ -214,6 +284,8 @@ class Note:
             pitch=data["pitch"],
             start_time=start_time,
             duration=duration,
+            start_tick=data.get("start_tick"),
+            duration_ticks=data.get("duration_ticks"),
             velocity=data.get("velocity", 127),
             waveform=WaveformType(data.get("waveform", "square")),
             duty_cycle=data.get("duty_cycle", 0.5),
@@ -248,6 +320,8 @@ class Note:
             pitch=data["pitch"],
             start_time=start_time,
             duration=duration,
+            start_tick=data.get("start_tick"),
+            duration_ticks=data.get("duration_ticks"),
             velocity=data.get("velocity", 127),
             waveform=WaveformType(data.get("waveform", "square")),
             duty_cycle=data.get("duty_cycle", 0.5),
@@ -266,15 +340,66 @@ class Note:
         return not (self.end_time <= other.start_time or 
                    other.end_time <= self.start_time)
 
+    def get_start_tick(self, project: "Project") -> int:
+        """Return the note start tick in the project's standard timebase."""
+        if self.start_tick is not None:
+            return max(0, int(self.start_tick))
+        return project.seconds_to_ticks(self.start_time)
+
+    def get_duration_ticks(self, project: "Project") -> int:
+        """Return the note duration in ticks."""
+        if self.duration_ticks is not None:
+            return max(0, int(self.duration_ticks))
+        end_tick = project.seconds_to_ticks(self.end_time)
+        start_tick = self.get_start_tick(project)
+        return max(0, end_tick - start_tick)
+
+    def sync_tick_timing(self, project: "Project", prefer_existing: bool = True) -> None:
+        """Populate tick fields from either stored tick timing or current second timing."""
+        if prefer_existing:
+            start_tick = self.get_start_tick(project)
+            duration_ticks = self.get_duration_ticks(project)
+        else:
+            start_tick = max(0, project.seconds_to_ticks(self.start_time))
+            end_tick = max(start_tick, project.seconds_to_ticks(self.end_time))
+            duration_ticks = max(0, end_tick - start_tick)
+        self.start_tick = start_tick
+        self.duration_ticks = duration_ticks
+
+    def sync_second_timing(self, project: "Project") -> None:
+        """Populate second timing from the current tick timing."""
+        self.apply_tick_timing(
+            project,
+            self.get_start_tick(project),
+            self.get_duration_ticks(project),
+        )
+
+    def apply_tick_timing(
+        self,
+        project: "Project",
+        start_tick: int,
+        duration_ticks: int,
+    ) -> None:
+        """Update both tick and second timing from standard musical timing."""
+        safe_start_tick = max(0, int(start_tick))
+        safe_duration_ticks = max(0, int(duration_ticks))
+        self.start_tick = safe_start_tick
+        self.duration_ticks = safe_duration_ticks
+        self.start_time = project.ticks_to_seconds(safe_start_tick)
+        end_time = project.ticks_to_seconds(safe_start_tick + safe_duration_ticks)
+        self.duration = max(0.0, end_time - self.start_time)
+
 
 @dataclass
 class Track:
     """轨道数据模型"""
     name: str = "Track 1"
     track_type: 'TrackType' = None  # 音轨类型（NOTE_TRACK 或 DRUM_TRACK）
+    role: Optional['TrackRole'] = None  # 音符音轨角色（主旋律/低音/和声/效果）
     volume: float = 1.0      # 音量（0-1）
     pan: float = 0.0         # 声相（-1到1，0为居中）
     enabled: bool = True    # 是否启用
+    display_height: Optional[int] = None  # UI 中该音轨的显示高度（像素）
     notes: List[Note] = field(default_factory=list)  # 音符列表（用于音符音轨）
     drum_events: List['DrumEvent'] = field(default_factory=list)  # 打击乐事件列表（用于打击乐音轨）
     # 效果参数（可选）
@@ -291,6 +416,7 @@ class Track:
                 self.track_type = TrackType.DRUM_TRACK
             else:
                 self.track_type = TrackType.NOTE_TRACK
+        self.role = normalize_track_role(self.role, self.name, self.track_type)
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典（完整格式）"""
@@ -301,6 +427,10 @@ class Track:
             "pan": self.pan,
             "enabled": self.enabled,
         }
+        if self.role is not None:
+            result["role"] = self.role.value
+        if self.display_height is not None:
+            result["display_height"] = int(self.display_height)
         if self.track_type == TrackType.DRUM_TRACK:
             result["drum_events"] = [event.to_dict() for event in self.drum_events]
         else:
@@ -316,6 +446,10 @@ class Track:
             "pan": self.pan,
             "enabled": self.enabled,
         }
+        if self.role is not None:
+            result["role"] = self.role.value
+        if self.display_height is not None:
+            result["display_height"] = int(self.display_height)
         if self.track_type == TrackType.DRUM_TRACK:
             result["drum_events"] = [event.to_dict() for event in self.drum_events]
         else:
@@ -331,6 +465,10 @@ class Track:
             "pan": self.pan,
             "enabled": self.enabled,
         }
+        if self.role is not None:
+            result["role"] = self.role.value
+        if self.display_height is not None:
+            result["display_height"] = int(self.display_height)
         if self.track_type == TrackType.DRUM_TRACK:
             result["drum_events"] = [event.to_dict() for event in self.drum_events]
         else:
@@ -346,7 +484,12 @@ class Track:
         # 检查音轨类型
         track_type_str = data.get("track_type", "note")
         track_type = TrackType(track_type_str) if track_type_str else TrackType.NOTE_TRACK
-        
+        track_role = normalize_track_role(
+            data.get("role"),
+            data.get("name", "Track 1"),
+            track_type,
+        )
+
         # 如果是打击乐音轨，处理 drum_events
         if track_type == TrackType.DRUM_TRACK:
             from .track_events import DrumEvent
@@ -355,9 +498,11 @@ class Track:
             return cls(
                 name=data.get("name", "Track 1"),
                 track_type=track_type,
+                role=track_role,
                 volume=data.get("volume", 1.0),
                 pan=data.get("pan", 0.0),
                 enabled=data.get("enabled", True),
+                display_height=data.get("display_height"),
                 drum_events=drum_events
             )
         
@@ -391,9 +536,11 @@ class Track:
         return cls(
             name=data.get("name", "Track 1"),
             track_type=track_type,
+            role=track_role,
             volume=data.get("volume", 1.0),
             pan=data.get("pan", 0.0),
             enabled=data.get("enabled", True),
+            display_height=data.get("display_height"),
             notes=[Note.from_dict(note_data) for note_data in notes_data]
         )
     
@@ -410,7 +557,12 @@ class Track:
         # 检查音轨类型
         track_type_str = data.get("track_type", "note")
         track_type = TrackType(track_type_str) if track_type_str else TrackType.NOTE_TRACK
-        
+        track_role = normalize_track_role(
+            data.get("role"),
+            data.get("name", "Track 1"),
+            track_type,
+        )
+
         # 如果是打击乐音轨，处理 drum_events
         if track_type == TrackType.DRUM_TRACK:
             from .track_events import DrumEvent
@@ -419,9 +571,11 @@ class Track:
             return cls(
                 name=data.get("name", "Track 1"),
                 track_type=track_type,
+                role=track_role,
                 volume=data.get("volume", 1.0),
                 pan=data.get("pan", 0.0),
                 enabled=data.get("enabled", True),
+                display_height=data.get("display_height"),
                 drum_events=drum_events
             )
         
@@ -460,9 +614,11 @@ class Track:
         return cls(
             name=data.get("name", "Track 1"),
             track_type=track_type,
+            role=track_role,
             volume=data.get("volume", 1.0),
             pan=data.get("pan", 0.0),
             enabled=data.get("enabled", True),
+            display_height=data.get("display_height"),
             notes=notes
         )
     
@@ -475,7 +631,12 @@ class Track:
         # 检查音轨类型
         track_type_str = data.get("track_type", "note")
         track_type = TrackType(track_type_str) if track_type_str else TrackType.NOTE_TRACK
-        
+        track_role = normalize_track_role(
+            data.get("role"),
+            data.get("name", "Track 1"),
+            track_type,
+        )
+
         # 如果是打击乐音轨，处理 drum_events
         if track_type == TrackType.DRUM_TRACK:
             from .track_events import DrumEvent
@@ -484,9 +645,11 @@ class Track:
             return cls(
                 name=data.get("name", "Track 1"),
                 track_type=track_type,
+                role=track_role,
                 volume=data.get("volume", 1.0),
                 pan=data.get("pan", 0.0),
                 enabled=data.get("enabled", True),
+                display_height=data.get("display_height"),
                 drum_events=drum_events
             )
         
@@ -508,9 +671,11 @@ class Track:
         return cls(
             name=data.get("name", "Track 1"),
             track_type=track_type,
+            role=track_role,
             volume=data.get("volume", 1.0),
             pan=data.get("pan", 0.0),
             enabled=data.get("enabled", True),
+            display_height=data.get("display_height"),
             notes=notes
         )
     
@@ -555,16 +720,33 @@ class Project:
     name: str = "Untitled Project"
     bpm: float = 120.0              # 节拍速度（当前BPM，用于兼容性，实际使用bpm_segments）
     original_bpm: Optional[float] = None  # 原始BPM（JSON生成时的BPM，用于BPM缩放）
+    resolution: int = DEFAULT_PPQN  # 标准时间模型中的每拍tick数（PPQN）
     time_signature: tuple = (4, 4)  # 拍号（分子，分母）
     sample_rate: int = 44100        # 采样率
     tracks: List[Track] = field(default_factory=list)  # 轨道列表
     bpm_segments: List[BPMSegment] = field(default_factory=list)  # BPM段列表（支持可变BPM）
+    tempo_events: List[TempoEvent] = field(default_factory=list)  # 标准tick时间轴上的速度事件
+    _tempo_region_cache: List[tuple[int, Optional[int], float, float]] = field(
+        default_factory=list,
+        init=False,
+        repr=False,
+    )
+    _tempo_region_cache_signature: Optional[tuple[Any, ...]] = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
     
     def __post_init__(self):
         """初始化后处理"""
-        # 如果没有BPM段，创建一个默认段
-        if not self.bpm_segments:
-            self.bpm_segments = [BPMSegment(start_time=0.0, bpm=self.bpm)]
+        self.resolution = int(self.resolution) if int(self.resolution) > 0 else DEFAULT_PPQN
+        if self.tempo_events:
+            self.replace_tempo_events(self.tempo_events)
+        elif self.bpm_segments:
+            self.replace_bpm_segments(self.bpm_segments)
+        else:
+            self.replace_tempo_events([TempoEvent(0, self.bpm)])
+        self.sync_note_seconds_from_ticks()
     
     def get_bpm_at_time(self, time: float) -> float:
         """获取指定时间的BPM值"""
@@ -582,44 +764,227 @@ class Project:
             return self.bpm_segments[-1].bpm
         
         return self.bpm
-    
+
+    def uses_variable_bpm(self) -> bool:
+        """Return whether the project uses a multi-segment tempo map."""
+        return len(self.tempo_events) > 1
+
+    def get_reference_bpm(self) -> float:
+        """Return the legacy single-BPM reference used by note timing."""
+        reference_bpm = self.original_bpm if self.original_bpm is not None else self.bpm
+        return reference_bpm if reference_bpm > 0 else 120.0
+
+    def beats_to_seconds(self, beats: float) -> float:
+        """Convert beats to project timeline seconds."""
+        return self.ticks_to_seconds(self.beats_to_ticks(beats))
+
+    def seconds_to_beats(self, seconds: float) -> float:
+        """Convert project timeline seconds to beats."""
+        return self.ticks_to_beats(self.seconds_to_ticks(seconds))
+
+    def beats_to_ticks(self, beats: float) -> int:
+        """Convert beats to project ticks."""
+        return musical_beats_to_ticks(beats, self.resolution)
+
+    def ticks_to_beats(self, ticks: int) -> float:
+        """Convert ticks to beats."""
+        return musical_ticks_to_beats(ticks, self.resolution)
+
+    def ticks_to_seconds(self, ticks: int) -> float:
+        """Convert ticks to seconds using the standard tick tempo map."""
+        return ticks_to_seconds_with_regions(
+            ticks,
+            self.get_tempo_regions(),
+            self.resolution,
+        )
+
+    def seconds_to_ticks(self, seconds: float) -> int:
+        """Convert seconds to ticks using the standard tick tempo map."""
+        return seconds_to_ticks_with_regions(
+            seconds,
+            self.get_tempo_regions(),
+            self.resolution,
+        )
+
+    def _invalidate_tempo_region_cache(self) -> None:
+        self._tempo_region_cache = []
+        self._tempo_region_cache_signature = None
+
+    def _tempo_region_signature(self) -> tuple[Any, ...]:
+        return (
+            int(self.resolution),
+            float(self.get_reference_bpm()),
+            tuple((int(event.tick), float(event.bpm)) for event in self.tempo_events),
+        )
+
+    def get_tempo_regions(self) -> List[tuple[int, Optional[int], float, float]]:
+        """Return cached tempo regions for repeated timeline conversions."""
+        signature = self._tempo_region_signature()
+        if self._tempo_region_cache_signature != signature:
+            self._tempo_region_cache = build_tempo_regions(
+                self.tempo_events,
+                self.resolution,
+                self.get_reference_bpm(),
+            )
+            self._tempo_region_cache_signature = signature
+        return self._tempo_region_cache
+
+    def replace_bpm_segments(self, bpm_segments: List[BPMSegment]) -> None:
+        """Replace legacy second-based BPM segments and sync standard tempo events."""
+        self.sync_note_ticks_from_seconds()
+        normalized_segments = [
+            BPMSegment(
+                start_time=max(0.0, float(segment.start_time)),
+                bpm=float(segment.bpm),
+                end_time=segment.end_time,
+            )
+            for segment in list(bpm_segments or [])
+        ]
+        if not normalized_segments:
+            normalized_segments = [BPMSegment(start_time=0.0, bpm=self.get_reference_bpm())]
+        normalized_segments.sort(key=lambda segment: segment.start_time)
+        normalized_segments[0].start_time = 0.0
+        self.bpm_segments = normalized_segments
+        self.bpm = self.bpm_segments[0].bpm
+        self._update_segment_end_times()
+        self.sync_note_seconds_from_ticks()
+
+    def replace_tempo_events(self, tempo_events: List[TempoEvent]) -> None:
+        """Replace standard tick-based tempo events and sync legacy BPM segments."""
+        self.sync_note_ticks_from_seconds()
+        safe_bpm = self.get_reference_bpm()
+        normalized_events = sorted(
+            [
+                TempoEvent(
+                    tick=max(0, int(event.tick)),
+                    bpm=float(event.bpm if float(event.bpm) > 0 else safe_bpm),
+                )
+                for event in list(tempo_events or [])
+            ],
+            key=lambda event: event.tick,
+        )
+        if not normalized_events:
+            normalized_events = [TempoEvent(0, safe_bpm)]
+
+        deduped_events: List[TempoEvent] = []
+        for event in normalized_events:
+            if deduped_events and deduped_events[-1].tick == event.tick:
+                deduped_events[-1] = event
+            else:
+                deduped_events.append(event)
+
+        if deduped_events[0].tick != 0:
+            deduped_events.insert(0, TempoEvent(0, deduped_events[0].bpm))
+        else:
+            deduped_events[0] = TempoEvent(0, deduped_events[0].bpm)
+
+        self.tempo_events = deduped_events
+        self._invalidate_tempo_region_cache()
+        self.bpm = self.tempo_events[0].bpm
+        self._sync_segments_from_tempo_events()
+        self.sync_note_seconds_from_ticks()
+
+    def add_tempo_event(self, tick: int, bpm: float) -> TempoEvent:
+        """Add a tempo event on the standard musical timeline."""
+        new_event = TempoEvent(tick=max(0, int(tick)), bpm=float(bpm))
+        self.replace_tempo_events([*self.tempo_events, new_event])
+        for event in self.tempo_events:
+            if event.tick == new_event.tick:
+                return event
+        return self.tempo_events[-1]
+
+    def remove_tempo_event(self, tempo_event: TempoEvent) -> None:
+        """Remove a tempo event and keep the tempo map normalized."""
+        remaining_events = [
+            event for event in self.tempo_events if event != tempo_event
+        ]
+        self.replace_tempo_events(remaining_events)
+
+    def sync_note_ticks_from_seconds(self) -> None:
+        """Capture current UI-facing second timing into the note tick bridge."""
+        for track in self.tracks:
+            if track.track_type != TrackType.NOTE_TRACK:
+                continue
+            for note in track.notes:
+                note.sync_tick_timing(self, prefer_existing=False)
+
+    def sync_note_seconds_from_ticks(self) -> None:
+        """Refresh note second timing from the standard tick timeline."""
+        for track in self.tracks:
+            if track.track_type != TrackType.NOTE_TRACK:
+                continue
+            for note in track.notes:
+                if note.start_tick is None or note.duration_ticks is None:
+                    note.sync_tick_timing(self, prefer_existing=False)
+                note.sync_second_timing(self)
+            track.notes.sort(key=lambda note: note.start_time)
+
     def add_bpm_segment(self, start_time: float, bpm: float, end_time: Optional[float] = None) -> BPMSegment:
         """添加BPM段"""
         segment = BPMSegment(start_time=start_time, bpm=bpm, end_time=end_time)
-        self.bpm_segments.append(segment)
-        # 按开始时间排序
-        self.bpm_segments.sort(key=lambda s: s.start_time)
-        # 更新前一个段的结束时间
-        self._update_segment_end_times()
-        return segment
+        self.replace_bpm_segments([*self.bpm_segments, segment])
+        return max(
+            self.bpm_segments,
+            key=lambda current: (current.start_time == max(0.0, float(start_time)), current.start_time),
+        )
     
     def remove_bpm_segment(self, segment: BPMSegment) -> None:
         """删除BPM段"""
         if segment in self.bpm_segments:
-            self.bpm_segments.remove(segment)
-            # 如果删除后没有段了，创建一个默认段
-            if not self.bpm_segments:
-                self.bpm_segments = [BPMSegment(start_time=0.0, bpm=self.bpm)]
-            else:
-                self._update_segment_end_times()
+            remaining_segments = [
+                current_segment
+                for current_segment in self.bpm_segments
+                if current_segment != segment
+            ]
+            self.replace_bpm_segments(remaining_segments)
     
     def _update_segment_end_times(self) -> None:
         """更新BPM段的结束时间"""
         # 按开始时间排序
         self.bpm_segments.sort(key=lambda s: s.start_time)
+        if self.bpm_segments:
+            self.bpm_segments[0].start_time = 0.0
         # 更新每个段的结束时间（除了最后一个）
         for i in range(len(self.bpm_segments) - 1):
             self.bpm_segments[i].end_time = self.bpm_segments[i + 1].start_time
         # 最后一个段的结束时间为None（表示到项目结束）
         if self.bpm_segments:
             self.bpm_segments[-1].end_time = None
+        self._sync_tempo_events_from_segments()
+
+    def _sync_tempo_events_from_segments(self) -> None:
+        """Derive tick-based tempo events from legacy second-based segments."""
+        self.tempo_events = tempo_events_from_bpm_segments(
+            self.bpm_segments,
+            self.resolution,
+            self.get_reference_bpm(),
+        )
+        self._invalidate_tempo_region_cache()
+        if self.tempo_events:
+            self.bpm = self.tempo_events[0].bpm
+
+    def _sync_segments_from_tempo_events(self) -> None:
+        """Derive second-based BPM segments for legacy UI paths."""
+        rows = tempo_event_rows_to_segments(
+            self.tempo_events,
+            self.resolution,
+            self.get_reference_bpm(),
+        )
+        self.bpm_segments = [
+            BPMSegment(start_time=start_time, bpm=bpm, end_time=end_time)
+            for start_time, bpm, end_time in rows
+        ]
+        if self.bpm_segments:
+            self.bpm = self.bpm_segments[0].bpm
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
+        self.sync_note_ticks_from_seconds()
         result = {
             "name": self.name,
             "bpm": self.bpm,
             "original_bpm": self.original_bpm if self.original_bpm is not None else self.bpm,
+            "resolution": self.resolution,
             "time_signature": list(self.time_signature),
             "sample_rate": self.sample_rate,
             "tracks": [track.to_dict() for track in self.tracks]
@@ -627,6 +992,8 @@ class Project:
         # 如果有BPM段，添加BPM段信息
         if self.bpm_segments and len(self.bpm_segments) > 1:
             result["bpm_segments"] = [segment.to_dict() for segment in self.bpm_segments]
+        if self.tempo_events:
+            result["tempo_events"] = [event.to_dict() for event in self.tempo_events]
         return result
     
     def to_dict_sequence(self) -> Dict[str, Any]:
@@ -636,6 +1003,7 @@ class Project:
             "name": self.name,
             "bpm": self.bpm,
             "original_bpm": self.original_bpm if self.original_bpm is not None else self.bpm,
+            "resolution": self.resolution,
             "time_signature": list(self.time_signature),
             "sample_rate": self.sample_rate,
             "tracks": [track.to_dict_sequence(bpm) for track in self.tracks]
@@ -647,6 +1015,7 @@ class Project:
             "name": self.name,
             "bpm": self.bpm,
             "original_bpm": self.original_bpm if self.original_bpm is not None else self.bpm,
+            "resolution": self.resolution,
             "time_signature": list(self.time_signature),
             "sample_rate": self.sample_rate,
             "tracks": [track.to_dict_grid() for track in self.tracks]
@@ -661,6 +1030,7 @@ class Project:
             original_bpm = data.get("bpm", 120.0)
         
         current_bpm = data.get("bpm", 120.0)
+        resolution = int(data.get("resolution", DEFAULT_PPQN) or DEFAULT_PPQN)
         
         # 创建轨道（使用当前BPM用于序列格式的导入）
         tracks = []
@@ -672,25 +1042,21 @@ class Project:
         bpm_segments = []
         if "bpm_segments" in data and data["bpm_segments"]:
             bpm_segments = [BPMSegment.from_dict(seg_data) for seg_data in data["bpm_segments"]]
+        tempo_events = []
+        if "tempo_events" in data and data["tempo_events"]:
+            tempo_events = [TempoEvent.from_dict(event_data) for event_data in data["tempo_events"]]
         
         project = cls(
             name=data.get("name", "Untitled Project"),
             bpm=current_bpm,
             original_bpm=original_bpm,
+            resolution=resolution,
             time_signature=tuple(data.get("time_signature", [4, 4])),
             sample_rate=data.get("sample_rate", 44100),
             tracks=tracks,
-            bpm_segments=bpm_segments
+            bpm_segments=bpm_segments,
+            tempo_events=tempo_events,
         )
-        
-        # 如果没有BPM段，创建一个默认段
-        if not project.bpm_segments:
-            project.bpm_segments = [BPMSegment(start_time=0.0, bpm=current_bpm)]
-        else:
-            # 确保段按开始时间排序
-            project.bpm_segments.sort(key=lambda s: s.start_time)
-            project._update_segment_end_times()
-        
         return project
     
     def add_track(self, track: Track) -> None:
@@ -702,7 +1068,7 @@ class Project:
         if track in self.tracks:
             self.tracks.remove(track)
     
-    def get_total_duration(self) -> float:
+    def _legacy_get_total_duration(self) -> float:
         """获取项目总时长"""
         max_duration = 0.0
         for track in self.tracks:
@@ -718,3 +1084,15 @@ class Project:
                     max_duration = max(max_duration, note.end_time)
         return max_duration
 
+    def get_total_duration(self) -> float:
+        """鑾峰彇椤圭洰鎬绘椂闀?"""
+        max_duration = 0.0
+        for track in self.tracks:
+            if track.track_type == TrackType.DRUM_TRACK:
+                for event in track.drum_events:
+                    event_end_time = self.beats_to_seconds(event.end_beat)
+                    max_duration = max(max_duration, event_end_time)
+            else:
+                for note in track.notes:
+                    max_duration = max(max_duration, note.end_time)
+        return max_duration

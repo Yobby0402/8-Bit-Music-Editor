@@ -22,8 +22,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from core.models import Track, TrackType
-from core.seed_music_generator import SeedMusicStyle, get_style_meta, get_style_variants
+from core.models import Track, TrackRole, TrackType
+from core.seed_style_catalog import SeedMusicStyle, get_style_meta, get_style_variants
 
 
 @dataclass(frozen=True)
@@ -39,6 +39,37 @@ class SeedGenerationSelection:
     length_index: int
     style_index: int
     variant_index: int
+
+
+@dataclass(frozen=True)
+class NewTrackSelection:
+    """添加音轨对话框返回的用户选择。"""
+
+    name: str
+    track_type: TrackType
+    role: TrackRole | None = None
+
+
+NEW_TRACK_ROLE_OPTIONS: tuple[tuple[str, TrackRole], ...] = (
+    ("主旋律", TrackRole.MELODY),
+    ("低音", TrackRole.BASS),
+    ("和声", TrackRole.HARMONY),
+    ("效果", TrackRole.EFFECT),
+)
+
+
+def build_new_track_default_name(track_count: int, track_type: TrackType) -> str:
+    """构建添加音轨对话框中的默认名称。"""
+    if track_type == TrackType.DRUM_TRACK:
+        return "打击乐"
+    return f"音轨 {track_count + 1}"
+
+
+def resolve_new_track_role_from_editor_index(index: int) -> TrackRole:
+    """将角色下拉框索引转换为 TrackRole。"""
+    if 0 <= index < len(NEW_TRACK_ROLE_OPTIONS):
+        return NEW_TRACK_ROLE_OPTIONS[index][1]
+    return TrackRole.MELODY
 
 
 class _SeedGenerateDialog(QDialog):
@@ -229,7 +260,7 @@ class _SeedGenerateDialog(QDialog):
         )
 
 
-def prompt_new_track(parent, track_count: int) -> Optional[tuple[str, TrackType]]:
+def prompt_new_track(parent, track_count: int) -> Optional[NewTrackSelection]:
     """弹出添加音轨对话框，返回用户输入的音轨信息。"""
     dialog = QDialog(parent)
     dialog.setWindowTitle("添加音轨")
@@ -241,13 +272,40 @@ def prompt_new_track(parent, track_count: int) -> Optional[tuple[str, TrackType]
     layout.addWidget(QLabel("音轨名称:"))
     name_input = QLineEdit()
     name_input.setPlaceholderText("请输入音轨名称")
-    name_input.setText(f"音轨 {track_count + 1}")
+    current_default_name = build_new_track_default_name(track_count, TrackType.NOTE_TRACK)
+    name_input.setText(current_default_name)
     layout.addWidget(name_input)
 
     layout.addWidget(QLabel("音轨类型:"))
     track_type_combo = QComboBox()
     track_type_combo.addItems(["音符音轨", "打击乐音轨"])
     layout.addWidget(track_type_combo)
+
+    track_role_row = QWidget()
+    track_role_layout = QHBoxLayout(track_role_row)
+    track_role_layout.setContentsMargins(0, 0, 0, 0)
+    track_role_layout.addWidget(QLabel("音轨角色:"))
+    track_role_combo = QComboBox()
+    track_role_combo.addItems([label for label, _ in NEW_TRACK_ROLE_OPTIONS])
+    track_role_layout.addWidget(track_role_combo)
+    layout.addWidget(track_role_row)
+
+    def refresh_track_type_controls() -> None:
+        nonlocal current_default_name
+        current_track_type = (
+            TrackType.NOTE_TRACK
+            if track_type_combo.currentIndex() == 0
+            else TrackType.DRUM_TRACK
+        )
+        track_role_row.setVisible(current_track_type == TrackType.NOTE_TRACK)
+        next_default_name = build_new_track_default_name(track_count, current_track_type)
+        current_name = name_input.text().strip()
+        if not current_name or current_name == current_default_name:
+            name_input.setText(next_default_name)
+        current_default_name = next_default_name
+
+    track_type_combo.currentIndexChanged.connect(lambda _index: refresh_track_type_controls())
+    refresh_track_type_controls()
 
     button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
     button_box.accepted.connect(dialog.accept)
@@ -257,9 +315,12 @@ def prompt_new_track(parent, track_count: int) -> Optional[tuple[str, TrackType]
     if dialog.exec_() != QDialog.Accepted:
         return None
 
-    track_name = name_input.text().strip() or f"音轨 {track_count + 1}"
+    track_name = name_input.text().strip() or current_default_name
     track_type = TrackType.NOTE_TRACK if track_type_combo.currentIndex() == 0 else TrackType.DRUM_TRACK
-    return track_name, track_type
+    track_role = None
+    if track_type == TrackType.NOTE_TRACK:
+        track_role = resolve_new_track_role_from_editor_index(track_role_combo.currentIndex())
+    return NewTrackSelection(track_name, track_type, track_role)
 
 
 def prompt_oscilloscope_render_count(parent, theme, current_value: int) -> Optional[int]:

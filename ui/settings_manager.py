@@ -22,6 +22,7 @@ class SettingsManager(QObject):
         "show_velocity_opacity": False,  # 是否根据力度显示音符透明度（力度越小越透明）
         # 播放相关
         "playhead_refresh_interval_ms": 50,    # 播放线刷新间隔（毫秒），默认50ms≈20FPS
+        "playback_view_mode": "moving_playhead",  # 播放显示模式：播放线移动 / 播放线固定
         # 显示与主题相关设置
         "ui_background_color": "#FAFAFA",   # 全局背景色
         "ui_foreground_color": "#2E7D32",   # 全局前景/文字主色
@@ -134,6 +135,25 @@ class SettingsManager(QObject):
         """设置播放线刷新间隔（毫秒）"""
         interval_ms = max(10, min(200, int(interval_ms)))  # 限制在10-200ms之间
         self.set("playhead_refresh_interval_ms", interval_ms)
+
+    def get_playback_view_mode(self) -> str:
+        """获取播放显示模式。"""
+        mode = str(
+            self.get(
+                "playback_view_mode",
+                self.DEFAULT_SETTINGS["playback_view_mode"],
+            )
+        )
+        if mode not in {"moving_playhead", "fixed_playhead"}:
+            return self.DEFAULT_SETTINGS["playback_view_mode"]
+        return mode
+
+    def set_playback_view_mode(self, mode: str):
+        """设置播放显示模式。"""
+        normalized_mode = str(mode or "").strip()
+        if normalized_mode not in {"moving_playhead", "fixed_playhead"}:
+            normalized_mode = self.DEFAULT_SETTINGS["playback_view_mode"]
+        self.set("playback_view_mode", normalized_mode)
     
     # ===== 显示相关便捷方法 =====
     def get_ui_background_color(self) -> str:

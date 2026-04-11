@@ -4,17 +4,122 @@ MIDI导入导出模块
 负责MIDI文件的读取和写入。
 """
 
-from typing import Any, Dict, List, Optional
+from time import perf_counter
+from typing import Dict, List, Optional
 
 import mido
 from mido import Message, MetaMessage, MidiFile, MidiTrack
 
 from .models import ADSRParams, BPMSegment, Note, Project, Track, TrackType, WaveformType
+from .musical_time import TempoEvent, TempoRegion, build_tempo_regions, ticks_to_seconds_with_regions
+
+MIDI_IMPORT_PROFILE_THRESHOLD_MS = 200.0
 
 
 class MidiIO:
+    @staticmethod
+    def _log_import_profile(
+        *,
+        file_path: str,
+        load_ms: float,
+        tempo_ms: float,
+        tracks_ms: float,
+        track_count: int,
+        note_count: int,
+    ) -> None:
+        """Print a compact stage breakdown for slow MIDI imports."""
+        total_ms = load_ms + tempo_ms + tracks_ms
+        if total_ms < MIDI_IMPORT_PROFILE_THRESHOLD_MS:
+            return
+
+        print(
+            "[PROFILE] midi.import_stages "
+            f"total={total_ms:.1f}ms "
+            f"load={load_ms:.1f}ms "
+            f"tempo={tempo_ms:.1f}ms "
+            f"tracks={tracks_ms:.1f}ms "
+            f"track_count={track_count} "
+            f"note_count={note_count} "
+            f"source={file_path!r}"
+        )
+
+    @staticmethod
+    def _extract_track_name(midi_track: MidiTrack, track_index: int) -> str:
+        """Extract a displayable track name from a MIDI track."""
+        track_name = f"轨道 {track_index + 1}"
+        for msg in midi_track:
+            if msg.type != "track_name":
+                continue
+            try:
+                if isinstance(msg.name, bytes):
+                    try:
+                        track_name = msg.name.decode("utf-8")
+                    except UnicodeDecodeError:
+                        try:
+                            track_name = msg.name.decode("latin-1")
+                        except UnicodeDecodeError:
+                            try:
+                                track_name = msg.name.decode("gbk")
+                            except UnicodeDecodeError:
+                                track_name = msg.name.decode("utf-8", errors="replace")
+                else:
+                    track_name = msg.name
+            except Exception:
+                track_name = f"轨道 {track_index + 1}"
+            break
+        return track_name
+
+    @staticmethod
+    def _apply_note_tick_timing_fast(
+        note: Note,
+        start_tick: int,
+        duration_ticks: int,
+        tempo_regions: list[TempoRegion],
+        resolution: int,
+    ) -> None:
+        """Populate note tick/second timing using prebuilt tempo regions."""
+        safe_start_tick = max(0, int(start_tick))
+        safe_duration_ticks = max(0, int(duration_ticks))
+        start_time = ticks_to_seconds_with_regions(safe_start_tick, tempo_regions, resolution)
+        end_time = ticks_to_seconds_with_regions(
+            safe_start_tick + safe_duration_ticks,
+            tempo_regions,
+            resolution,
+        )
+        note.start_tick = safe_start_tick
+        note.duration_ticks = safe_duration_ticks
+        note.start_time = start_time
+        note.duration = max(0.0, end_time - start_time)
     """MIDI导入导出处理器"""
-    
+
+    @staticmethod
+    def _extract_tempo_events(mid: MidiFile) -> List[TempoEvent]:
+        """从MIDI文件中提取标准 tick 锚定的 tempo events。"""
+        raw_events = []
+        for midi_track in mid.tracks:
+            current_tick = 0
+            for msg in midi_track:
+                current_tick += msg.time
+                if msg.type == "set_tempo":
+                    raw_events.append((current_tick, float(mido.tempo2bpm(msg.tempo))))
+
+        if not raw_events:
+            return [TempoEvent(0, 120.0)]
+
+        raw_events.sort(key=lambda item: item[0])
+        tempo_events: List[TempoEvent] = []
+        for tick, bpm in raw_events:
+            event = TempoEvent(max(0, int(tick)), bpm)
+            if tempo_events and tempo_events[-1].tick == event.tick:
+                tempo_events[-1] = event
+            else:
+                tempo_events.append(event)
+
+        if tempo_events[0].tick != 0:
+            tempo_events.insert(0, TempoEvent(0, 120.0))
+
+        return tempo_events
+
     @staticmethod
     def _extract_bpm_segments(mid: MidiFile, ticks_per_beat: int) -> List[BPMSegment]:
         """
@@ -211,67 +316,43 @@ class MidiIO:
         Returns:
             Project对象
         """
+        load_started_at = perf_counter()
         mid = MidiFile(file_path)
+        load_ms = (perf_counter() - load_started_at) * 1000.0
         
         ticks_per_beat = mid.ticks_per_beat
-        
-        # 分析所有tempo变化，提取BPM段信息
-        bpm_segments = MidiIO._extract_bpm_segments(mid, ticks_per_beat)
-        
-        # 如果没有找到任何tempo消息，使用默认120 BPM
-        if not bpm_segments:
-            bpm = 120.0
-            bpm_segments = [BPMSegment(start_time=0.0, bpm=bpm)]
-        else:
-            # 使用第一个BPM段的BPM作为默认BPM（用于兼容性）
-            bpm = bpm_segments[0].bpm
+
+        tempo_started_at = perf_counter()
+        tempo_events = MidiIO._extract_tempo_events(mid)
+        tempo_ms = (perf_counter() - tempo_started_at) * 1000.0
+        bpm = tempo_events[0].bpm if tempo_events else 120.0
         
         # 创建项目
         project = Project(
             name=file_path.split('/')[-1].split('\\')[-1].replace('.mid', '').replace('.midi', ''),
             bpm=bpm,
             original_bpm=bpm,
+            resolution=ticks_per_beat,
             time_signature=(4, 4),
             sample_rate=44100,
-            bpm_segments=bpm_segments
+            tempo_events=tempo_events,
+        )
+        tempo_regions = build_tempo_regions(
+            project.tempo_events,
+            project.resolution,
+            project.get_reference_bpm(),
         )
         
         # 处理每个MIDI轨道
+        track_parse_started_at = perf_counter()
+        total_notes = 0
         for track_index, midi_track in enumerate(mid.tracks):
             # 跳过空轨道
             if len(midi_track) == 0:
                 continue
             
             # 创建轨道
-            track_name = f"轨道 {track_index + 1}"
-            # 尝试从轨道名称消息中获取名称
-            for msg in midi_track:
-                if msg.type == 'track_name':
-                    # 尝试多种编码方式处理轨道名称，避免乱码
-                    try:
-                        # mido库返回的name可能是bytes或str
-                        if isinstance(msg.name, bytes):
-                            # 尝试UTF-8解码
-                            try:
-                                track_name = msg.name.decode('utf-8')
-                            except UnicodeDecodeError:
-                                # 如果UTF-8失败，尝试latin-1（MIDI标准编码）
-                                try:
-                                    track_name = msg.name.decode('latin-1')
-                                except UnicodeDecodeError:
-                                    # 如果都失败，尝试GBK（中文Windows常用编码）
-                                    try:
-                                        track_name = msg.name.decode('gbk')
-                                    except UnicodeDecodeError:
-                                        # 最后尝试使用错误处理
-                                        track_name = msg.name.decode('utf-8', errors='replace')
-                        else:
-                            # 已经是字符串，直接使用
-                            track_name = msg.name
-                    except Exception:
-                        # 如果处理失败，使用默认名称
-                        track_name = f"轨道 {track_index + 1}"
-                    break
+            track_name = MidiIO._extract_track_name(midi_track, track_index)
             
             track = Track(
                 name=track_name,
@@ -282,8 +363,16 @@ class MidiIO:
             )
             
             # 解析MIDI消息，转换为音符
-            notes = MidiIO._parse_midi_track(midi_track, ticks_per_beat, bpm, default_waveform, snap_to_beat, allow_overlap)
+            notes = MidiIO._parse_midi_track(
+                midi_track,
+                project,
+                default_waveform,
+                snap_to_beat,
+                allow_overlap,
+                tempo_regions=tempo_regions,
+            )
             track.notes = notes
+            total_notes += len(notes)
             
             if notes:  # 只添加有音符的轨道
                 project.add_track(track)
@@ -296,12 +385,26 @@ class MidiIO:
             )
             project.add_track(default_track)
         
+        tracks_ms = (perf_counter() - track_parse_started_at) * 1000.0
+        MidiIO._log_import_profile(
+            file_path=file_path,
+            load_ms=load_ms,
+            tempo_ms=tempo_ms,
+            tracks_ms=tracks_ms,
+            track_count=len(project.tracks),
+            note_count=total_notes,
+        )
         return project
     
     @staticmethod
-    def _parse_midi_track(midi_track: MidiTrack, ticks_per_beat: int, bpm: float, 
-                          default_waveform: WaveformType = WaveformType.SQUARE,
-                          snap_to_beat: bool = True, allow_overlap: bool = False) -> List[Note]:
+    def _parse_midi_track(
+        midi_track: MidiTrack,
+        project: Project,
+        default_waveform: WaveformType = WaveformType.SQUARE,
+        snap_to_beat: bool = True,
+        allow_overlap: bool = False,
+        tempo_regions: list[TempoRegion] | None = None,
+    ) -> List[Note]:
         """
         解析MIDI轨道，转换为Note列表
         
@@ -315,122 +418,95 @@ class MidiIO:
             Note列表
         """
         notes = []
-        active_notes: Dict[int, Dict[str, Any]] = {}  # {note_number: {start_tick, start_time, velocity}}
-        
-        # 跟踪当前的tempo（以微秒/四分音符为单位，而不是BPM）
-        # 重要：MIDI标准规定，如果没有tempo消息，默认使用120 BPM（500000微秒/四分音符）
-        # 但是，如果轨道中有tempo消息，应该使用第一个tempo消息的值
-        # 为了正确处理，我们使用传入的bpm参数来初始化，然后在解析过程中更新
-        # 如果轨道中有tempo消息，它会在解析过程中被处理并更新current_tempo_microseconds
-        current_tempo_microseconds = mido.bpm2tempo(bpm)
-        current_time = 0.0  # 当前时间（秒）
-        tick_time = 0       # 当前tick数
-        tempo_initialized = False  # 标记是否已经遇到第一个tempo消息
-        
-        # 根据当前tempo计算tick到秒的转换
-        # 使用mido库的内置方法确保准确性
-        def ticks_to_seconds(ticks: int, tempo_microseconds: int) -> float:
-            if tempo_microseconds <= 0 or ticks_per_beat <= 0:
-                return 0.0
-            # 使用mido库的tick2second方法，确保时间转换的准确性
-            # tick2second(ticks, ticks_per_beat, tempo_microseconds)
-            try:
-                return mido.tick2second(ticks, ticks_per_beat, tempo_microseconds)
-            except Exception:
-                # 如果mido方法失败，使用标准公式作为后备
-                # tempo_microseconds 是每四分音符的微秒数
-                # 每个tick的秒数 = (tempo_microseconds / 1,000,000) / ticks_per_beat
-                result = ticks * (tempo_microseconds / 1_000_000.0) / ticks_per_beat
-                return result
-        
+        active_notes: Dict[int, Dict[str, int]] = {}  # {note_number: {start_tick, velocity}}
+        tick_time = 0
+        snap_tick = max(1, project.beats_to_ticks(0.25))
+
         for msg in midi_track:
-            # 更新当前时间（在tempo变化之前计算，使用旧的tempo）
-            # 重要：MIDI标准规定，tempo消息在它出现之后才生效
-            # 所以，在计算当前消息的delta time时，应该使用消息出现之前的tempo
             tick_time += msg.time
-            time_delta = ticks_to_seconds(msg.time, current_tempo_microseconds)
-            current_time += time_delta
-            
-            # 处理tempo消息（允许MIDI内部改变速度）
-            # 注意：tempo变化在当前消息的时间计算之后生效，影响后续消息
             if msg.type == 'set_tempo':
-                # 如果这是第一个tempo消息，记录它用于后续参考
-                if not tempo_initialized:
-                    tempo_initialized = True
-                current_tempo_microseconds = msg.tempo
                 continue
-            
-            # 处理note_on消息
+
             if msg.type == 'note_on' and msg.velocity > 0:
                 note_number = msg.note
-                velocity = msg.velocity
                 active_notes[note_number] = {
                     'start_tick': tick_time,
-                    'start_time': current_time,
-                    'velocity': velocity
+                    'velocity': msg.velocity,
                 }
-            
-            # 处理note_off消息（或velocity=0的note_on）
             elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
                 note_number = msg.note
                 if note_number in active_notes:
                     note_info = active_notes[note_number]
-                    duration = current_time - note_info['start_time']
-                    
-                    # 创建Note对象
-                    if duration > 0.001:  # 只添加有效时长的音符
-                        start_time = note_info['start_time']
-                        
-                        # 如果启用吸附对齐，对齐到1/4拍网格
-                        # 注意：使用当前tempo（current_tempo_microseconds）而不是初始bpm，以正确处理tempo变化
+                    start_tick = note_info['start_tick']
+                    duration_ticks = max(0, tick_time - start_tick)
+
+                    if duration_ticks > 0:
                         if snap_to_beat:
-                            # 使用当前tempo计算节拍，而不是初始bpm
-                            # 这样可以正确处理MIDI文件中的tempo变化
-                            current_tempo_bpm = mido.tempo2bpm(current_tempo_microseconds)
-                            beats_per_second = current_tempo_bpm / 60.0
-                            start_beats = start_time * beats_per_second
-                            # 对齐到1/4拍
-                            start_beats = round(start_beats * 4) / 4
-                            start_time = start_beats / beats_per_second
-                        
-                        # 检查重叠（如果不允许重叠）
+                            start_tick = int(round(start_tick / snap_tick) * snap_tick)
+
                         if not allow_overlap:
                             for existing_note in notes:
-                                if (start_time < existing_note.end_time and 
-                                    start_time + duration > existing_note.start_time):
-                                    # 移动到下一个可用位置
-                                    start_time = existing_note.end_time
+                                existing_start_tick = existing_note.get_start_tick(project)
+                                existing_end_tick = (
+                                    existing_start_tick + existing_note.get_duration_ticks(project)
+                                )
+                                if (
+                                    start_tick < existing_end_tick
+                                    and start_tick + duration_ticks > existing_start_tick
+                                ):
+                                    start_tick = existing_end_tick
                                     break
-                        
+
                         note = Note(
                             pitch=note_number,
-                            start_time=start_time,
-                            duration=duration,
+                            start_time=0.0,
+                            duration=0.0,
                             velocity=note_info['velocity'],
-                            waveform=default_waveform,  # 使用传入的默认波形
-                            adsr=ADSRParams()
+                            waveform=default_waveform,
+                            adsr=ADSRParams(),
                         )
+                        if tempo_regions is None:
+                            note.apply_tick_timing(project, start_tick, duration_ticks)
+                        else:
+                            MidiIO._apply_note_tick_timing_fast(
+                                note,
+                                start_tick,
+                                duration_ticks,
+                                tempo_regions,
+                                project.resolution,
+                            )
                         notes.append(note)
-                    
+
                     del active_notes[note_number]
-        
-        # 处理未关闭的音符（在轨道结束时）
+
         for note_number, note_info in active_notes.items():
-            # 假设最后一个音符持续到轨道结束
-            duration = 0.5  # 默认0.5秒
+            duration_ticks = project.beats_to_ticks(1.0)
             note = Note(
                 pitch=note_number,
-                start_time=note_info['start_time'],
-                duration=duration,
+                start_time=0.0,
+                duration=0.0,
                 velocity=note_info['velocity'],
-                waveform=default_waveform,  # 使用传入的默认波形
-                adsr=ADSRParams()
+                waveform=default_waveform,
+                adsr=ADSRParams(),
             )
+            if tempo_regions is None:
+                note.apply_tick_timing(project, note_info['start_tick'], duration_ticks)
+            else:
+                MidiIO._apply_note_tick_timing_fast(
+                    note,
+                    note_info['start_tick'],
+                    duration_ticks,
+                    tempo_regions,
+                    project.resolution,
+                )
             notes.append(note)
-        
-        # 按开始时间排序
-        notes.sort(key=lambda n: n.start_time)
-        
+
+        notes.sort(
+            key=lambda note: (
+                note.start_tick if note.start_tick is not None else float("inf"),
+                note.start_time,
+            )
+        )
         return notes
     
     @staticmethod
@@ -442,8 +518,9 @@ class MidiIO:
             project: 项目对象
             file_path: 输出文件路径
         """
+        project.sync_note_ticks_from_seconds()
         mid = MidiFile()
-        mid.ticks_per_beat = 480  # 标准MIDI分辨率
+        mid.ticks_per_beat = int(project.resolution or 480)
         
         # 为每个轨道创建MIDI轨道
         for track in project.tracks:
@@ -457,31 +534,21 @@ class MidiIO:
             # mido库使用latin-1编码，需要将非ASCII字符转换为ASCII兼容字符串
             safe_track_name = MidiIO._encode_track_name(track.name)
             midi_track.append(MetaMessage('track_name', name=safe_track_name, time=0))
-            
-            # 设置tempo（只在第一个轨道设置，并且需要设置所有BPM段）
+
+            events = []
             if mid.tracks.index(midi_track) == 0:
-                # 如果有BPM段，导出所有BPM段
-                if project.bpm_segments and len(project.bpm_segments) > 1:
-                    MidiIO._add_bpm_segments_to_track(midi_track, project.bpm_segments, mid.ticks_per_beat)
-                else:
-                    # 否则使用默认BPM
-                    tempo = mido.bpm2tempo(project.bpm)
-                    midi_track.append(MetaMessage('set_tempo', tempo=tempo, time=0))
-            
-            # 转换音符为MIDI消息（使用可变BPM）
-            MidiIO._convert_notes_to_midi_with_bpm_segments(
-                track.notes, midi_track, project.bpm_segments, mid.ticks_per_beat
-            )
+                events.extend(MidiIO._build_tempo_meta_events(project.tempo_events))
+            events.extend(MidiIO._build_note_events(track.notes, project))
+            MidiIO._append_sorted_events_to_track(midi_track, events)
         
         # 如果没有轨道，创建一个空轨道
         if len(mid.tracks) == 0:
             midi_track = MidiTrack()
             mid.tracks.append(midi_track)
-            if project.bpm_segments and len(project.bpm_segments) > 1:
-                MidiIO._add_bpm_segments_to_track(midi_track, project.bpm_segments, mid.ticks_per_beat)
-            else:
-                tempo = mido.bpm2tempo(project.bpm)
-                midi_track.append(MetaMessage('set_tempo', tempo=tempo, time=0))
+            MidiIO._append_sorted_events_to_track(
+                midi_track,
+                MidiIO._build_tempo_meta_events(project.tempo_events),
+            )
         
         # 保存文件
         mid.save(file_path)
@@ -517,6 +584,39 @@ class MidiIO:
             
             tempo = mido.bpm2tempo(segment.bpm)
             midi_track.append(MetaMessage('set_tempo', tempo=tempo, time=delta_ticks))
+
+    @staticmethod
+    def _add_tempo_events_to_track(
+        midi_track: MidiTrack,
+        tempo_events: List[TempoEvent],
+    ) -> None:
+        """将标准 tempo events 写入MIDI轨道。"""
+        if not tempo_events:
+            midi_track.append(MetaMessage('set_tempo', tempo=mido.bpm2tempo(120.0), time=0))
+            return
+
+        last_tick = 0
+        for event in tempo_events:
+            current_tick = max(0, int(event.tick))
+            delta_tick = current_tick - last_tick
+            last_tick = current_tick
+            midi_track.append(
+                MetaMessage('set_tempo', tempo=mido.bpm2tempo(float(event.bpm)), time=delta_tick)
+            )
+
+    @staticmethod
+    def _build_tempo_meta_events(tempo_events: List[TempoEvent]) -> List[Dict[str, int | float | str]]:
+        """Build absolute-tick tempo meta events for export."""
+        if not tempo_events:
+            return [{'tick': 0, 'type': 'set_tempo', 'tempo': mido.bpm2tempo(120.0)}]
+        return [
+            {
+                'tick': max(0, int(event.tick)),
+                'type': 'set_tempo',
+                'tempo': mido.bpm2tempo(float(event.bpm)),
+            }
+            for event in tempo_events
+        ]
     
     @staticmethod
     def _convert_notes_to_midi_with_bpm_segments(
@@ -567,6 +667,101 @@ class MidiIO:
                 msg = Message('note_off', note=event['note'], velocity=0, time=delta_tick)
             
             midi_track.append(msg)
+
+    @staticmethod
+    def _convert_notes_to_midi_with_project_tempo(
+        notes: List[Note],
+        midi_track: MidiTrack,
+        project: Project,
+    ) -> None:
+        """将Note列表转换为MIDI消息，优先使用项目标准 tick 时间模型。"""
+        MidiIO._append_sorted_events_to_track(
+            midi_track,
+            MidiIO._build_note_events(notes, project),
+        )
+
+    @staticmethod
+    def _build_note_events(
+        notes: List[Note],
+        project: Project,
+    ) -> List[Dict[str, int | str]]:
+        """Build absolute-tick note events for export."""
+        sorted_notes = sorted(
+            notes,
+            key=lambda note: (
+                note.start_tick if note.start_tick is not None else project.seconds_to_ticks(note.start_time),
+                note.start_time,
+            ),
+        )
+
+        events: List[Dict[str, int | str]] = []
+        for note in sorted_notes:
+            if note.pitch <= 0:
+                continue
+
+            start_tick = note.get_start_tick(project)
+            end_tick = start_tick + note.get_duration_ticks(project)
+            events.append({
+                'tick': start_tick,
+                'type': 'note_on',
+                'note': note.pitch,
+                'velocity': note.velocity,
+            })
+            events.append({
+                'tick': end_tick,
+                'type': 'note_off',
+                'note': note.pitch,
+                'velocity': 0,
+            })
+        return events
+
+    @staticmethod
+    def _append_sorted_events_to_track(
+        midi_track: MidiTrack,
+        events: List[Dict[str, int | float | str]],
+    ) -> None:
+        """Append absolute-tick events to a MIDI track using proper delta times."""
+        event_priority = {
+            'set_tempo': 0,
+            'note_off': 1,
+            'note_on': 2,
+        }
+        sorted_events = sorted(
+            events,
+            key=lambda event: (
+                int(event['tick']),
+                event_priority.get(str(event['type']), 99),
+            ),
+        )
+
+        last_tick = 0
+        for event in sorted_events:
+            current_tick = int(event['tick'])
+            delta_tick = current_tick - last_tick
+            last_tick = current_tick
+
+            if event['type'] == 'set_tempo':
+                midi_track.append(
+                    MetaMessage('set_tempo', tempo=int(event['tempo']), time=delta_tick)
+                )
+            elif event['type'] == 'note_on':
+                midi_track.append(
+                    Message(
+                        'note_on',
+                        note=int(event['note']),
+                        velocity=int(event['velocity']),
+                        time=delta_tick,
+                    )
+                )
+            else:
+                midi_track.append(
+                    Message(
+                        'note_off',
+                        note=int(event['note']),
+                        velocity=0,
+                        time=delta_tick,
+                    )
+                )
     
     @staticmethod
     def _time_to_ticks_with_bpm_segments(time: float, bpm_segments: List[BPMSegment], ticks_per_beat: int) -> int:

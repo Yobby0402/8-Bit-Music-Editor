@@ -14,11 +14,12 @@ from .command import (
     AddNoteCommand,
     BatchModifyNotesCommand,
     CommandHistory,
+    CommandHistoryResult,
     DeleteNoteCommand,
     ModifyNoteCommand,
     MoveNoteCommand,
 )
-from .models import Note, Project, Track, TrackType, WaveformType
+from .models import Note, Project, Track, TrackRole, TrackType, WaveformType
 from .track_events import DrumEvent, DrumType
 
 
@@ -32,22 +33,110 @@ class PlaybackState:
     end_time: float = 0.0  # 实际音频结束时间（秒），用于精确控制播放线与停止时刻
 
 
+@dataclass(frozen=True)
+class PreparedTrackAudio:
+    """Thread-safe prepared track audio."""
+
+    track: Track
+    audio_buffer: np.ndarray
+    track_id: int
+    initial_volume: float
+
+
+@dataclass(frozen=True)
+class PreparedPlaybackPlan:
+    """Prepared playback data that can be started later on the UI thread."""
+
+    start_time: float
+    end_time: float
+    loop: bool
+    volume_scale: float
+    tracks: list[PreparedTrackAudio]
+
+
+def prepare_playback_plan(
+    project: Project,
+    sample_rate: int,
+    *,
+    start_time: float = 0.0,
+    loop: bool = False,
+    loop_end: Optional[float] = None,
+    playback_enabled_tracks: Optional[dict] = None,
+    playback_volume_ratios: Optional[dict] = None,
+) -> PreparedPlaybackPlan | None:
+    """Render all track audio needed for a future playback start."""
+    end_time = project.get_total_duration()
+    if loop_end is not None:
+        end_time = min(end_time, loop_end)
+
+    if end_time <= start_time:
+        return None
+
+    render_engine = AudioEngine(sample_rate, initialize_mixer=False)
+    track_audio_list = render_engine.generate_track_audio_list(
+        project,
+        start_time,
+        end_time,
+        playback_enabled_tracks=playback_enabled_tracks,
+    )
+
+    valid_tracks = [
+        (track, audio_data, track_id)
+        for track, audio_data, track_id in track_audio_list
+        if len(audio_data) > 0
+    ]
+    if not valid_tracks:
+        return None
+
+    max_duration = max(
+        len(audio_data) / float(sample_rate)
+        for _, audio_data, _ in valid_tracks
+    )
+    volume_scale = 1.0 / len(valid_tracks) if len(valid_tracks) > 1 else 1.0
+    volume_ratios = playback_volume_ratios or {}
+
+    prepared_tracks = [
+        PreparedTrackAudio(
+            track=track,
+            audio_buffer=render_engine.pack_audio_for_playback(audio_data),
+            track_id=track_id,
+            initial_volume=volume_ratios.get(track_id, 1.0) * volume_scale,
+        )
+        for track, audio_data, track_id in valid_tracks
+    ]
+
+    return PreparedPlaybackPlan(
+        start_time=start_time,
+        end_time=start_time + max_duration,
+        loop=loop,
+        volume_scale=volume_scale,
+        tracks=prepared_tracks,
+    )
+
+
 class Sequencer:
     """序列器"""
     
-    def __init__(self, project: Optional[Project] = None, sample_rate: int = 44100):
+    def __init__(
+        self,
+        project: Optional[Project] = None,
+        sample_rate: int = 44100,
+        *,
+        initialize_audio: bool = True,
+    ):
         """
         初始化序列器
         
         Args:
             project: 项目对象，None则创建新项目
             sample_rate: 采样率
+            initialize_audio: 是否初始化真实音频设备
         """
         if project is None:
             project = Project()
         
         self.project = project
-        self.audio_engine = AudioEngine(sample_rate)
+        self.audio_engine = AudioEngine(sample_rate, initialize_mixer=initialize_audio)
         self.playback_state = PlaybackState()
         self._current_sound = None
         
@@ -68,13 +157,19 @@ class Sequencer:
         # 清空命令历史（新项目）
         self.command_history.clear()
     
-    def add_track(self, name: str = None, track_type: TrackType = TrackType.NOTE_TRACK) -> Track:
+    def add_track(
+        self,
+        name: str = None,
+        track_type: TrackType = TrackType.NOTE_TRACK,
+        role: TrackRole | None = None,
+    ) -> Track:
         """
         添加新轨道
         
         Args:
             name: 轨道名称
             track_type: 音轨类型（NOTE_TRACK 或 DRUM_TRACK）
+            role: 音符音轨角色（主旋律/低音/和声/效果）
         
         Returns:
             新创建的轨道
@@ -85,7 +180,11 @@ class Sequencer:
             else:
                 name = f"Track {len(self.project.tracks) + 1}"
         
-        track = Track(name=name, track_type=track_type)
+        track = Track(
+            name=name,
+            track_type=track_type,
+            role=None if track_type == TrackType.DRUM_TRACK else role,
+        )
         self.project.add_track(track)
         return track
     
@@ -119,10 +218,15 @@ class Sequencer:
         # 音符的波形由用户选择，不再使用音轨的默认波形
         note = Note(
             pitch=pitch,
-            start_time=start_time,
-            duration=duration,
+            start_time=0.0,
+            duration=0.0,
             velocity=velocity,
             waveform=WaveformType.SQUARE  # 默认波形，用户可以在属性面板中修改
+        )
+        note.apply_tick_timing(
+            self.project,
+            self.project.seconds_to_ticks(start_time),
+            max(0, self.project.seconds_to_ticks(start_time + duration) - self.project.seconds_to_ticks(start_time)),
         )
         
         if use_command:
@@ -244,105 +348,12 @@ class Sequencer:
         return notes
     
     def play(self, start_time: float = 0.0, loop: bool = False) -> None:
-        """
-        播放项目（使用每个音轨单独播放，支持实时音量控制）
-        
-        Args:
-            start_time: 开始播放时间（秒）
-            loop: 是否循环播放
-        """
-        self.stop()
-        
-        # 确定播放范围
-        # 注意：如果JSON中存储的时间是基于不同BPM的，需要根据当前BPM重新计算
-        # 但为了简化，我们假设JSON中的时间是基于项目BPM的
-        end_time = self.project.get_total_duration()
-        if self.playback_state.loop_end is not None:
-            end_time = min(end_time, self.playback_state.loop_end)
-        
-        if end_time <= start_time:
+        """Synchronously play via the prepared-playback pipeline."""
+        plan = self.prepare_playback(start_time=start_time, loop=loop)
+        if plan is None:
+            self.stop()
             return
-        
-        # 设置播放启用状态
-        if hasattr(self, 'playback_enabled_tracks') and self.playback_enabled_tracks:
-            self.project._playback_enabled_tracks = self.playback_enabled_tracks
-        else:
-            self.project._playback_enabled_tracks = None
-        
-        # 为每个音轨生成单独的音频
-        track_audio_list = self.audio_engine.generate_track_audio_list(
-            self.project, start_time, end_time
-        )
-        
-        if not track_audio_list:
-            return
-        
-        # 计算总时长（使用最长的音轨）
-        max_duration = 0.0
-        for track, audio_data, track_id in track_audio_list:
-            if len(audio_data) > 0:
-                duration = len(audio_data) / float(self.audio_engine.sample_rate)
-                max_duration = max(max_duration, duration)
-        
-        self.playback_state.end_time = start_time + max_duration
-        
-        # 为每个音轨单独播放，使用Channel支持实时音量控制
-        # 先准备所有Sound对象和Channel，然后同步启动以确保对齐
-        self._current_sounds = []
-        channels_to_start = []  # [(channel, sound, loops), ...]
-        
-        # 计算实际播放的音轨数量（排除空音频）
-        valid_tracks = [t for t, audio, _ in track_audio_list if len(audio) > 0]
-        num_tracks = len(valid_tracks)
-        
-        # 当多个音轨同时播放时，需要降低每个音轨的音量以防止硬件混合时的削波
-        # 使用更保守的衰减策略，确保混合后不会失真
-        if num_tracks > 1:
-            # 使用 1/N 衰减，这样N个音轨混合后的总音量约为单个音轨的1倍
-            # 这是最保守的方法，确保不会削波，但可能会稍微降低整体音量
-            # 用户可以通过主音量或播放设置中的音量占比来调整
-            volume_scale = 1.0 / num_tracks
-        else:
-            volume_scale = 1.0
-        
-        # 保存音量缩放因子，用于实时音量更新
-        self.current_volume_scale = volume_scale
-        print(f"[DEBUG] sequencer.play() - num_tracks: {num_tracks}, volume_scale: {volume_scale:.4f}")
-        
-        for track, audio_data, track_id in track_audio_list:
-            # 调试信息：检查音频数据
-            print(f"[DEBUG] Track: {track.name}, track_id: {track_id}, audio_len: {len(audio_data)}, track.volume: {track.volume}")
-            if len(audio_data) == 0:
-                print(f"[DEBUG] Skipping track {track.name} - empty audio")
-                continue
-            
-            # 检查音频数据是否全为0
-            if np.max(np.abs(audio_data)) < 0.001:
-                print(f"[DEBUG] Warning: Track {track.name} audio is nearly silent (max amplitude: {np.max(np.abs(audio_data))})")
-            
-            # 获取该音轨的音量占比
-            volume_ratio = self.playback_volume_ratios.get(track_id, 1.0) if self.playback_volume_ratios else 1.0
-            # 注意：track.volume已经在generate_note_audio中应用到音频了
-            # 所以这里只需要传入volume_ratio，最终音量 = volume_ratio * master_volume * volume_scale
-            initial_volume = volume_ratio * volume_scale  # 应用音量缩放以防止削波
-            
-            # 创建Sound对象和Channel，但不立即播放
-            sound, channel = self.audio_engine.prepare_track_audio(
-                audio_data,
-                volume=initial_volume,
-                track_id=track_id
-            )
-            
-            if sound and channel:
-                self._current_sounds.append(sound)
-                channels_to_start.append((channel, sound, -1 if loop else 0))
-        
-        # 同步启动所有Channel，确保音轨对齐
-        for channel, sound, loops in channels_to_start:
-            channel.play(sound, loops=loops)
-        
-        self.playback_state.is_playing = True
-        self.playback_state.current_time = start_time
+        self.start_prepared_playback(plan)
     
     def pause(self) -> None:
         """暂停播放"""
@@ -357,6 +368,55 @@ class Sequencer:
         self.playback_state.current_time = 0.0
         self.playback_state.end_time = 0.0
     
+    def prepare_playback(
+        self,
+        start_time: float = 0.0,
+        loop: bool = False,
+    ) -> PreparedPlaybackPlan | None:
+        """Prepare track audio for playback without touching pygame state."""
+        return prepare_playback_plan(
+            self.project,
+            self.audio_engine.sample_rate,
+            start_time=start_time,
+            loop=loop,
+            loop_end=self.playback_state.loop_end,
+            playback_enabled_tracks=self.playback_enabled_tracks,
+            playback_volume_ratios=self.playback_volume_ratios,
+        )
+
+    def start_prepared_playback(self, plan: PreparedPlaybackPlan) -> bool:
+        """Start playback from a previously rendered plan."""
+        self.stop()
+
+        self._current_sounds = []
+        channels_to_start = []
+        self.current_volume_scale = plan.volume_scale
+        self.playback_state.end_time = plan.end_time
+
+        for prepared_track in plan.tracks:
+            sound, channel = self.audio_engine.prepare_packed_track_audio(
+                prepared_track.audio_buffer,
+                volume=prepared_track.initial_volume,
+                track_id=prepared_track.track_id,
+            )
+            if sound and channel:
+                self._current_sounds.append(sound)
+                channels_to_start.append((channel, sound, -1 if plan.loop else 0))
+
+        if not channels_to_start:
+            return False
+
+        for channel, sound, loops in channels_to_start:
+            channel.play(sound, loops=loops)
+
+        self.playback_state.is_playing = True
+        self.playback_state.current_time = plan.start_time
+        return True
+
+    def _play_legacy(self, start_time: float = 0.0, loop: bool = False) -> None:
+        """Backward-compatible alias to the prepared playback path."""
+        self.play(start_time=start_time, loop=loop)
+
     def set_loop_region(self, start_time: float, end_time: Optional[float] = None) -> None:
         """
         设置循环区域
@@ -396,7 +456,7 @@ class Sequencer:
         Returns:
             秒数
         """
-        return beats * 60.0 / self.project.bpm
+        return self.project.beats_to_seconds(beats)
     
     def seconds_to_beats(self, seconds: float) -> float:
         """
@@ -408,7 +468,7 @@ class Sequencer:
         Returns:
             节拍数
         """
-        return seconds * self.project.bpm / 60.0
+        return self.project.seconds_to_beats(seconds)
     
     def modify_note(self, track: Track, note: Note, **kwargs) -> None:
         """
@@ -448,21 +508,21 @@ class Sequencer:
         command = MoveNoteCommand(self, track, note, new_start_time)
         self.command_history.execute_command(command)
     
-    def undo(self) -> Optional[str]:
+    def undo(self) -> Optional[CommandHistoryResult]:
         """
         撤销上一个操作
         
         Returns:
-            命令描述，如果无法撤销则返回None
+            命令结果，如果无法撤销则返回None
         """
         return self.command_history.undo()
     
-    def redo(self) -> Optional[str]:
+    def redo(self) -> Optional[CommandHistoryResult]:
         """
         重做下一个操作
         
         Returns:
-            命令描述，如果无法重做则返回None
+            命令结果，如果无法重做则返回None
         """
         return self.command_history.redo()
     

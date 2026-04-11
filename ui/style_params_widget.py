@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (
 )
 
 from core.models import ADSRParams, Project, WaveformType
-from core.seed_music_generator import (
+from core.seed_style_catalog import (
     SeedMusicStyle,
     StyleParams,
     get_style_meta,
@@ -190,6 +190,7 @@ class StyleParamsWidget(QWidget):
             SeedMusicStyle.DANCE: "慢摇 / 舞曲",
             SeedMusicStyle.CALM: "舒缓 / 美好",
             SeedMusicStyle.ROCK: "重金属 / 摇滚",
+            SeedMusicStyle.WORKSHOP: "工作坊 / 专注",
         }
 
         app = QApplication.instance()

@@ -1,5 +1,8 @@
 # 为什么使用秒而不是ticks？
 
+> 历史说明：本文描述的是项目早期的“秒优先”设计取舍，现已不再代表后续架构方向。
+> 当前应优先参考 [standard_time_model_refactor.md](/f:/Code/8bit/docs/standard_time_model_refactor.md)，项目正在迁移到 `tick + tempo_events + second(派生)` 的标准时间模型。
+
 ## 当前设计
 
 我们的应用内部使用**秒（seconds）**来存储和操作时间，而不是MIDI的**ticks**。

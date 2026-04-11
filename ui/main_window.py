@@ -46,6 +46,13 @@ class MainWindow(
         self.current_midi_file_path = None
         self.current_seed_style = None
         self.current_seed_variant = None
+        self._midi_import_thread = None
+        self._midi_import_worker = None
+        self._midi_import_request_id = 0
+        self._midi_import_progress = None
+        self._playback_prepare_thread = None
+        self._playback_prepare_worker = None
+        self._playback_prepare_request_id = 0
 
         self.settings = QSettings("8bit", "MusicMaker")
         self.shortcut_manager = get_shortcut_manager()

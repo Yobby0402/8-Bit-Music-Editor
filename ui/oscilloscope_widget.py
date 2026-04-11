@@ -5,16 +5,53 @@
 波形从左侧生成，向右移动到蜂鸣器，到达蜂鸣器时才播放。
 """
 
-from typing import List, Tuple
+from typing import List, Sequence, Tuple
 
 import numpy as np
-from PyQt5.QtCore import QRect, Qt
+from PyQt5.QtCore import QRect, QSize, Qt
 from PyQt5.QtGui import QColor, QFont, QPainter, QPen
 from PyQt5.QtWidgets import QWidget
 
 from core.audio_engine import AudioEngine
 from core.models import Note, Track, TrackType
 from ui.theme import theme_manager
+
+
+def collect_enabled_unique_tracks(tracks: Sequence[Track]) -> list[Track]:
+    """Return enabled tracks without duplicates while preserving order."""
+    seen_track_ids: set[int] = set()
+    unique_tracks: list[Track] = []
+    for track in tracks:
+        if not track.enabled:
+            continue
+        track_id = id(track)
+        if track_id in seen_track_ids:
+            continue
+        seen_track_ids.add(track_id)
+        unique_tracks.append(track)
+    return unique_tracks
+
+
+def resolve_tracks_to_render(
+    tracks: Sequence[Track],
+    selected_tracks_for_render: Sequence[Track] | None,
+    selected_track: Track | None,
+) -> list[Track]:
+    """Resolve the effective oscilloscope track list from current selection state."""
+    unique_tracks = list(tracks)
+    if selected_tracks_for_render:
+        user_selected = [track for track in selected_tracks_for_render if track in unique_tracks]
+        if user_selected:
+            return user_selected
+        return []
+    if selected_track is not None and selected_track in unique_tracks:
+        return [selected_track]
+    return unique_tracks
+
+
+def build_track_render_signature(tracks: Sequence[Track]) -> tuple[int, ...]:
+    """Build a stable identity signature for the current render list."""
+    return tuple(id(track) for track in tracks)
 
 
 class OscilloscopeWidget(QWidget):
@@ -101,19 +138,24 @@ class OscilloscopeWidget(QWidget):
         self.apply_theme()
         
         # 设置最小尺寸（适当降低，允许主窗口整体缩得更小一点）
-        self.setMinimumHeight(260)
+        self.setMinimumHeight(120)
         
         # 初始化音轨颜色映射（用于固定每个音轨的颜色）
         self.track_colors = {}
         
         # 波形缓存（避免每次重绘都重新生成）
         self.waveform_cache = {}  # key: (track_id, note_id), value: waveform_data
+        self._render_signature: tuple[int, ...] = ()
     
     def apply_theme(self):
         """应用主题样式"""
         theme = theme_manager.current_theme
         bg_color = theme.get_color("background")
         self.setStyleSheet(f"background-color: {bg_color};")
+
+    def minimumSizeHint(self):
+        """Allow the oscilloscope pane to shrink further inside the splitter."""
+        return QSize(320, 120)
     
     def set_tracks(self, tracks: List[Track], selected_track: Track = None):
         """设置音轨列表
@@ -122,46 +164,32 @@ class OscilloscopeWidget(QWidget):
             tracks: 所有音轨列表
             selected_track: 选中的音轨（如果提供，只渲染选中的音轨）
         """
-        # 去重：使用track的id确保每个音轨只出现一次
-        seen_track_ids = set()
-        unique_tracks = []
-        for track in tracks:
-            if track.enabled:
-                track_id = id(track)
-                if track_id not in seen_track_ids:
-                    seen_track_ids.add(track_id)
-                    unique_tracks.append(track)
-        
-        # 如果用户之前选择了要渲染的音轨，优先使用用户选择的音轨
-        if hasattr(self, '_selected_tracks_for_render') and self._selected_tracks_for_render:
-            # 只使用用户选择的音轨中在当前unique_tracks中的（确保音轨是启用的）
-            user_selected = [t for t in self._selected_tracks_for_render if t in unique_tracks]
-            if user_selected:
-                unique_tracks = user_selected
-            # 如果用户选择的音轨都不在传入的tracks中，但用户确实选择了，则使用用户选择的音轨
-            elif self._selected_tracks_for_render:
-                # 检查用户选择的音轨是否在项目中的所有音轨中
-                unique_tracks = self._selected_tracks_for_render
-        # 如果指定了选中的音轨，只使用选中的音轨（优先级低于用户选择的音轨）
-        elif selected_track is not None and selected_track in unique_tracks:
-            unique_tracks = [selected_track]
-        
-        # 检查音轨列表是否发生变化
-        old_track_ids = {id(track) for track in self.tracks} if hasattr(self, 'tracks') and self.tracks else set()
-        new_track_ids = {id(track) for track in unique_tracks}
-        
-        # 如果音轨列表发生变化，清除所有缓存和颜色映射（确保完全刷新）
+        if not hasattr(self, "_selected_tracks_for_render"):
+            self._selected_tracks_for_render = None
+
+        unique_tracks = collect_enabled_unique_tracks(tracks)
+        resolved_tracks = resolve_tracks_to_render(
+            unique_tracks,
+            self._selected_tracks_for_render,
+            selected_track,
+        )
+        render_signature = build_track_render_signature(resolved_tracks)
+        if render_signature == getattr(self, "_render_signature", ()):
+            self.selected_track = selected_track
+            self.update()
+            return False
+
+        old_track_ids = {id(track) for track in self.tracks} if getattr(self, "tracks", None) else set()
+        new_track_ids = set(render_signature)
+
         if old_track_ids != new_track_ids:
-            # 音轨列表变化，清除所有缓存和颜色
             if hasattr(self, 'waveform_cache'):
                 self.waveform_cache.clear()
-            # 清除所有颜色映射，重新分配
             self.track_colors.clear()
-        
-        self.tracks = unique_tracks
+
+        self.tracks = resolved_tracks
         self.selected_track = selected_track  # 保存选中的音轨
-        if not hasattr(self, '_selected_tracks_for_render'):
-            self._selected_tracks_for_render = None  # 用户选择的要渲染的音轨列表
+        self._render_signature = render_signature
         
         # 为每个音轨分配固定的颜色（基于音轨索引，而不是通道索引）
         # 这样即使音轨顺序变化，每个音轨的颜色也是固定的
@@ -179,6 +207,7 @@ class OscilloscopeWidget(QWidget):
             self.waveform_cache = {k: v for k, v in self.waveform_cache.items() if k[0] in current_track_ids}
         
         self.update()
+        return True
     
     def set_selected_tracks(self, selected_tracks: List[Track]):
         """设置要渲染的选中音轨列表（最多3个）
@@ -188,34 +217,21 @@ class OscilloscopeWidget(QWidget):
         """
         if len(selected_tracks) > 3:
             selected_tracks = selected_tracks[:3]
-        
-        # 保存用户选择的音轨
-        self._selected_tracks_for_render = selected_tracks
-        
-        # 使用set_tracks来确保所有逻辑都正确执行（包括颜色分配、缓存清除等）
-        # 传入所有启用的音轨，set_tracks会根据_selected_tracks_for_render自动筛选
-        # 但这里我们需要直接设置，所以先保存，然后调用set_tracks
-        # 实际上，我们应该直接设置tracks并触发更新
-        self.tracks = selected_tracks
-        
-        # 清除缓存
+
+        next_selected = list(selected_tracks)
+        current_signature = build_track_render_signature(
+            getattr(self, "_selected_tracks_for_render", []) or []
+        )
+        next_signature = build_track_render_signature(next_selected)
+        if current_signature == next_signature:
+            return False
+
+        self._selected_tracks_for_render = next_selected
         if hasattr(self, 'waveform_cache'):
             self.waveform_cache.clear()
         self.track_colors.clear()
-        
-        # 重新分配颜色
-        for i, track in enumerate(self.tracks):
-            track_key = id(track)
-            if track_key not in self.track_colors:
-                self.track_colors[track_key] = self.channel_colors[i % len(self.channel_colors)]
-        
-        # 触发重绘
-        self.update()
-        for i, track in enumerate(self.tracks):
-            track_key = id(track)
-            self.track_colors[track_key] = self.channel_colors[i % len(self.channel_colors)]
-        
-        self.update()
+        self._render_signature = ()
+        return True
     
     def set_bpm(self, bpm: float):
         """设置BPM"""

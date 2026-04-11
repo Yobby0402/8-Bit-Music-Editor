@@ -4,9 +4,9 @@
 
 import os
 import sys
-import time
+from time import perf_counter
 
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QThread
 from PyQt5.QtWidgets import QApplication, QFileDialog, QMessageBox, QProgressDialog
 
 from app_info import APP_NAME
@@ -15,11 +15,11 @@ from core.project_service import (
     EmptyAudioExportError,
     export_audio_document,
     export_midi_document,
-    import_midi_document,
     load_project_document,
     save_project_document,
 )
 from core.sequencer import Sequencer
+from ui.background_tasks import MidiImportWorker
 from ui.error_utils import show_error_with_console
 from ui.main_window_file_ops import (
     EXPORT_FILE_FILTER,
@@ -29,10 +29,55 @@ from ui.main_window_file_ops import (
     detect_open_file_kind,
     resolve_export_target,
 )
+from ui.performance_utils import begin_profile_span, finish_profile_span
+
+MIDI_IMPORT_UI_PROFILE_THRESHOLD_MS = 100.0
 
 
 class MainWindowProjectOpsMixin:
     """承载 MainWindow 的文件打开、保存、导入、导出流程。"""
+
+    def _begin_midi_import_profile(self, request_id: int, file_path: str) -> None:
+        """Start tracking a background MIDI import request."""
+        tokens = getattr(self, "_midi_import_profile_tokens", None)
+        if tokens is None:
+            tokens = {}
+            self._midi_import_profile_tokens = tokens
+        tokens[request_id] = begin_profile_span(
+            self,
+            "project.import_midi",
+            source=os.path.basename(file_path),
+        )
+
+    def _finish_midi_import_profile(self, request_id: int, *, outcome: str) -> None:
+        """Finish tracking a background MIDI import request."""
+        tokens = getattr(self, "_midi_import_profile_tokens", None)
+        if not tokens:
+            return
+        token = tokens.pop(request_id, None)
+        finish_profile_span(self, token, outcome=outcome)
+
+    def _log_midi_import_ui_profile(self, file_path: str, **stage_timings_ms: float) -> None:
+        """Print a stage breakdown for slow UI-side MIDI import work."""
+        total_ms = sum(stage_timings_ms.values())
+        if total_ms < MIDI_IMPORT_UI_PROFILE_THRESHOLD_MS:
+            return
+
+        stage_parts = " ".join(
+            f"{name}={elapsed_ms:.1f}ms"
+            for name, elapsed_ms in stage_timings_ms.items()
+        )
+        project = getattr(self.sequencer, "project", None)
+        tracks = getattr(project, "tracks", []) or []
+        note_count = sum(len(getattr(track, "notes", [])) for track in tracks)
+        print(
+            "[PROFILE] project.import_midi_ui_apply "
+            f"total={total_ms:.1f}ms "
+            f"{stage_parts} "
+            f"track_count={len(tracks)} "
+            f"note_count={note_count} "
+            f"source={os.path.basename(file_path)!r}"
+        )
 
     def _update_file_name_display(self):
         """更新当前文件标签显示。"""
@@ -48,13 +93,18 @@ class MainWindowProjectOpsMixin:
         else:
             self.file_name_label.setText("")
 
-    def _sync_project_bpm_to_ui(self, bpm: float):
+    def _sync_project_bpm_to_ui(self, bpm: float, *, refresh_sequence_widget: bool = True):
         """将项目 BPM 同步到主界面相关控件。"""
+        project = getattr(self.sequencer, "project", None)
+        if hasattr(self, "sequence_widget") and hasattr(self.sequence_widget, "set_project"):
+            self.sequence_widget.set_project(project)
+        if hasattr(self, "property_panel") and hasattr(self.property_panel, "set_project"):
+            self.property_panel.set_project(project)
         self.sequencer.set_bpm(bpm)
         self.bpm_spinbox.blockSignals(True)
         self.bpm_spinbox.setValue(int(bpm))
         self.bpm_spinbox.blockSignals(False)
-        self.sequence_widget.set_bpm(bpm)
+        self.sequence_widget.set_bpm(bpm, refresh=refresh_sequence_widget)
         self.unified_editor.set_bpm(bpm)
         self.property_panel.set_bpm(bpm)
         if hasattr(self, "oscilloscope_widget"):
@@ -75,41 +125,16 @@ class MainWindowProjectOpsMixin:
 
     def _refresh_project_after_open(self):
         """项目打开后刷新主界面。"""
-        self._sync_project_bpm_to_ui(float(self.sequencer.get_bpm()))
-        self.sequence_widget.refresh(force_full_refresh=True)
-        self.refresh_ui()
+        self._sync_project_bpm_to_ui(
+            float(self.sequencer.get_bpm()),
+            refresh_sequence_widget=False,
+        )
+        self.refresh_ui(force_full_refresh=True)
 
     def _refresh_project_after_midi_import(self, project):
         """MIDI 导入后刷新主界面和关联面板。"""
-        self.sequence_widget.set_tracks(project.tracks, preserve_selection=False)
-        self.sequence_widget.refresh(force_full_refresh=True)
-        self.sequence_widget.view.update()
-        self.sequence_widget.view.repaint()
-        if hasattr(self.sequence_widget, "scene"):
-            self.sequence_widget.scene.update()
-        QApplication.processEvents()
-
-        QTimer.singleShot(
-            200,
-            lambda: (
-                self.sequence_widget.refresh(force_full_refresh=True),
-                self.sequence_widget.view.update(),
-                self.sequence_widget.view.repaint(),
-            ),
-        )
-
-        self._sync_project_bpm_to_ui(float(project.bpm))
-
-        if hasattr(self, "playback_settings_panel"):
-            self.playback_settings_panel.set_tracks(project.tracks)
-            self.playback_settings_panel.set_volume_ratios(self.sequencer.playback_volume_ratios)
-
-        if hasattr(self, "bpm_editor_panel"):
-            self.bpm_editor_panel.set_project(project)
-
-        if hasattr(self.sequence_widget, "progress_bar"):
-            total_duration = project.get_total_duration()
-            self.sequence_widget.progress_bar.set_total_time(total_duration)
+        self._sync_project_bpm_to_ui(float(project.bpm), refresh_sequence_widget=False)
+        self.refresh_ui(force_full_refresh=True)
 
     def new_project(self):
         """新建项目。"""
@@ -125,7 +150,10 @@ class MainWindowProjectOpsMixin:
         self._update_file_name_display()
         self._clear_project_panel_state()
         self._reset_project_selection()
-        self._sync_project_bpm_to_ui(float(self.sequencer.get_bpm()))
+        self._sync_project_bpm_to_ui(
+            float(self.sequencer.get_bpm()),
+            refresh_sequence_widget=False,
+        )
         self.refresh_ui()
         self.statusBar().showMessage("已创建新项目")
 
@@ -307,79 +335,147 @@ class MainWindowProjectOpsMixin:
             error_msg = f"导出{format.upper()}失败:\n{exc}"
             show_error_with_console(self, "错误", error_msg, "critical", exc_info=sys.exc_info())
 
+    def _close_midi_import_progress(self):
+        """Close the active MIDI import progress dialog if one exists."""
+        progress = getattr(self, "_midi_import_progress", None)
+        if progress is None:
+            return
+
+        previous_signal_state = None
+        if hasattr(progress, "blockSignals"):
+            previous_signal_state = progress.blockSignals(True)
+        try:
+            progress.close()
+            progress.deleteLater()
+        finally:
+            if previous_signal_state is not None:
+                progress.blockSignals(previous_signal_state)
+            self._midi_import_progress = None
+
+    def _cleanup_midi_import_task(self, thread: QThread):
+        """Release references after the background MIDI import completes."""
+        if getattr(self, "_midi_import_thread", None) is not thread:
+            return
+
+        self._midi_import_thread = None
+        self._midi_import_worker = None
+        self._close_midi_import_progress()
+
+    def _cancel_pending_midi_import(self, request_id: int):
+        """Cancel the current MIDI import request result without killing the thread."""
+        if request_id != getattr(self, "_midi_import_request_id", 0):
+            return
+
+        self._finish_midi_import_profile(request_id, outcome="cancelled")
+        self._midi_import_request_id += 1
+        self._close_midi_import_progress()
+        self.statusBar().showMessage("已取消 MIDI 导入，正在等待后台任务收尾...")
+
+    def _on_midi_import_finished(self, request_id: int, load_result, file_path: str):
+        """Apply an asynchronously imported MIDI project to the UI."""
+        if request_id != getattr(self, "_midi_import_request_id", 0):
+            return
+
+        stage_started_at = perf_counter()
+        project = load_result.project
+        self.sequencer.set_project(project)
+        self.current_file_path = load_result.current_file_path
+        self.current_midi_file_path = load_result.current_midi_file_path
+        self.setWindowTitle(f"{APP_NAME} - {project.name}")
+        apply_project_ms = (perf_counter() - stage_started_at) * 1000.0
+
+        stage_started_at = perf_counter()
+        self._reset_project_selection()
+        reset_selection_ms = (perf_counter() - stage_started_at) * 1000.0
+
+        stage_started_at = perf_counter()
+        self._refresh_project_after_midi_import(project)
+        refresh_project_ms = (perf_counter() - stage_started_at) * 1000.0
+
+        stage_started_at = perf_counter()
+        self._update_file_name_display()
+        update_file_label_ms = (perf_counter() - stage_started_at) * 1000.0
+
+        stage_started_at = perf_counter()
+        self.statusBar().showMessage(f"已导入MIDI: {file_path}")
+        show_status_ms = (perf_counter() - stage_started_at) * 1000.0
+
+        stage_started_at = perf_counter()
+        directory = os.path.dirname(file_path)
+        self.settings.setValue("last_midi_directory", directory)
+        persist_directory_ms = (perf_counter() - stage_started_at) * 1000.0
+
+        self._finish_midi_import_profile(request_id, outcome="ok")
+        self._log_midi_import_ui_profile(
+            file_path,
+            apply_project_ms=apply_project_ms,
+            reset_selection_ms=reset_selection_ms,
+            refresh_project_ms=refresh_project_ms,
+            update_file_label_ms=update_file_label_ms,
+            show_status_ms=show_status_ms,
+            persist_directory_ms=persist_directory_ms,
+        )
+
+    def _on_midi_import_failed(self, request_id: int, exc: Exception):
+        """Handle a failed asynchronous MIDI import."""
+        if request_id != getattr(self, "_midi_import_request_id", 0):
+            return
+
+        self._finish_midi_import_profile(request_id, outcome="failed")
+        error_msg = f"导入MIDI失败:\n{exc}"
+        show_error_with_console(self, "错误", error_msg, "critical", exc_info=sys.exc_info())
+
     def import_midi_file(self, file_path: str):
         """导入 MIDI 文件。"""
         try:
             if not self.check_unsaved_changes():
                 return
-
-            progress = QProgressDialog("正在导入MIDI文件...", "取消", 0, 100, self)
-            progress.setWindowModality(Qt.WindowModal)
-            progress.setMinimumDuration(0)
-            progress.setValue(0)
-            QApplication.processEvents()
-
-            progress.setLabelText("正在读取MIDI文件...")
-            progress.setValue(10)
-            QApplication.processEvents()
+            if getattr(self, "_midi_import_thread", None) is not None:
+                self.statusBar().showMessage("正在导入 MIDI，请稍候...")
+                return
 
             self._clear_project_panel_state()
-
-            progress.setLabelText("正在解析MIDI数据...")
-            progress.setValue(20)
-            QApplication.processEvents()
-
             default_waveform = self.unified_editor.selected_waveform
+            request_id = getattr(self, "_midi_import_request_id", 0) + 1
+            self._midi_import_request_id = request_id
+            self._begin_midi_import_profile(request_id, file_path)
 
-            progress.setLabelText("正在导入MIDI文件...")
-            progress.setValue(40)
-            QApplication.processEvents()
-
-            load_result = import_midi_document(
-                file_path,
-                default_waveform=default_waveform,
-                snap_to_beat=False,
-                allow_overlap=True,
+            progress = QProgressDialog("正在导入MIDI文件...", "取消", 0, 0, self)
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.setAutoClose(False)
+            progress.setAutoReset(False)
+            progress.setLabelText("正在解析 MIDI 数据，这可能需要一些时间...")
+            progress.canceled.connect(
+                lambda rid=request_id: self._cancel_pending_midi_import(rid)
             )
-            project = load_result.project
+            self._midi_import_progress = progress
 
-            progress.setLabelText("正在设置项目...")
-            progress.setValue(60)
-            QApplication.processEvents()
+            thread = QThread(self)
+            worker = MidiImportWorker(file_path, default_waveform)
+            worker.moveToThread(thread)
+            thread.started.connect(worker.run)
+            worker.finished.connect(
+                lambda load_result, rid=request_id, source=file_path: (
+                    self._on_midi_import_finished(rid, load_result, source)
+                )
+            )
+            worker.failed.connect(
+                lambda exc, rid=request_id: self._on_midi_import_failed(rid, exc)
+            )
+            worker.finished.connect(thread.quit)
+            worker.failed.connect(thread.quit)
+            thread.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(
+                lambda current_thread=thread: self._cleanup_midi_import_task(current_thread)
+            )
 
-            self.sequencer.set_project(project)
-            self.current_file_path = load_result.current_file_path
-            self.current_midi_file_path = load_result.current_midi_file_path
-
-            progress.setLabelText("正在更新界面...")
-            progress.setValue(70)
-            QApplication.processEvents()
-
-            self._reset_project_selection()
-
-            progress.setLabelText("正在刷新显示...")
-            progress.setValue(80)
-            QApplication.processEvents()
-
-            self._refresh_project_after_midi_import(project)
-
-            progress.setLabelText("正在完成导入...")
-            progress.setValue(95)
-            QApplication.processEvents()
-
-            self._update_file_name_display()
-
-            progress.setValue(100)
-            progress.setLabelText("导入完成！")
-            QApplication.processEvents()
-
-            time.sleep(0.1)
-            progress.close()
-
-            self.statusBar().showMessage(f"已导入MIDI: {file_path}")
-
-            directory = os.path.dirname(file_path)
-            self.settings.setValue("last_midi_directory", directory)
+            self._midi_import_thread = thread
+            self._midi_import_worker = worker
+            progress.show()
+            self.statusBar().showMessage("正在导入 MIDI...")
+            thread.start()
         except Exception as exc:
             error_msg = f"导入MIDI失败:\n{exc}"
             show_error_with_console(self, "错误", error_msg, "critical", exc_info=sys.exc_info())

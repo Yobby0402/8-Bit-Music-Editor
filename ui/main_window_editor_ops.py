@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import QMessageBox
 from core.command import BatchCommand, DeleteNoteCommand, DeleteTrackCommand, ModifyNoteCommand
 from core.models import Note, Track, TrackType, WaveformType
 from core.track_events import DrumEvent, DrumType
+from ui.performance_utils import profile_window_operation
 
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 DRUM_NAMES = {
@@ -67,6 +68,15 @@ def build_track_multi_select_message(track: Track, selected_count: int) -> str:
     return f"音轨: {track.name}\n已选中 {selected_count} 个音符\n可以统一编辑共有属性"
 
 
+def convert_duration_beats_to_seconds(property_panel, note: Note, duration_beats: float, bpm: float) -> float:
+    """Convert duration beats to seconds using the property panel tempo semantics."""
+    if hasattr(property_panel, "_beats_to_seconds") and hasattr(property_panel, "_seconds_to_beats"):
+        start_beat = property_panel._seconds_to_beats(note.start_time)
+        end_time = property_panel._beats_to_seconds(start_beat + duration_beats)
+        return max(0.0, end_time - note.start_time)
+    return max(0.0, duration_beats) * 60.0 / bpm
+
+
 def build_single_note_property_updates(property_panel, note: Note, bpm: float) -> dict:
     """从属性面板提取单音符更新参数。"""
     kwargs = {}
@@ -78,7 +88,12 @@ def build_single_note_property_updates(property_panel, note: Note, bpm: float) -
 
     if hasattr(property_panel, "duration_spinbox"):
         duration_beats = property_panel.duration_spinbox.value()
-        duration_seconds = duration_beats * 60.0 / bpm
+        duration_seconds = convert_duration_beats_to_seconds(
+            property_panel,
+            note,
+            duration_beats,
+            bpm,
+        )
         if abs(duration_seconds - note.duration) > 0.001:
             kwargs["duration"] = duration_seconds
 
@@ -148,6 +163,21 @@ def build_batch_note_property_updates(property_panel) -> tuple[dict, int | None]
     return kwargs, velocity_offset
 
 
+def dedupe_note_track_pairs(notes_and_tracks: list[tuple[object, Track]]) -> list[tuple[object, Track]]:
+    """Keep note refresh batches stable and free of duplicate pairs."""
+    unique_pairs: list[tuple[object, Track]] = []
+    seen_pairs: set[tuple[int, int]] = set()
+
+    for note, track in notes_and_tracks:
+        pair_key = (id(note), id(track))
+        if pair_key in seen_pairs:
+            continue
+        seen_pairs.add(pair_key)
+        unique_pairs.append((note, track))
+
+    return unique_pairs
+
+
 class MainWindowEditorOpsMixin:
     """承载 MainWindow 中的编辑动作与属性同步流程。"""
 
@@ -172,10 +202,61 @@ class MainWindowEditorOpsMixin:
         if hasattr(self, "unified_editor"):
             self.unified_editor.set_selected_track(None)
 
+    def _set_selected_editor_track(self, track: Track | None) -> None:
+        """Keep the current editor track selection in sync across panels."""
+        self.selected_track = track
+        if hasattr(self, "unified_editor"):
+            self.unified_editor.set_selected_track(track)
+        if hasattr(self, "sequence_widget") and hasattr(self.sequence_widget, "set_highlighted_track"):
+            self.sequence_widget.set_highlighted_track(track)
+
+    def _refresh_after_note_updates(
+        self,
+        notes_and_tracks: list[tuple[object, Track]],
+        *,
+        preserve_selection: bool = True,
+        restore_selection: bool = False,
+        profile_operation: str = "editor.note_refresh",
+    ) -> None:
+        """Choose the lightest safe refresh path after note edits."""
+        unique_pairs = dedupe_note_track_pairs(notes_and_tracks)
+        if not unique_pairs:
+            return
+
+        oscilloscope_active = False
+        if hasattr(self, "_is_oscilloscope_view_active"):
+            oscilloscope_active = self._is_oscilloscope_view_active()
+
+        with profile_window_operation(
+            self,
+            profile_operation,
+            note_count=len(unique_pairs),
+            preserve_selection=preserve_selection,
+            restore_selection=restore_selection,
+            oscilloscope_view=oscilloscope_active,
+        ):
+            refresh_ok = False
+            if len(unique_pairs) == 1:
+                note, track = unique_pairs[0]
+                refresh_ok = self._sync_note_block_ui(note, track)
+            else:
+                refresh_ok = self._sync_note_blocks_ui(unique_pairs)
+
+            if refresh_ok:
+                if hasattr(self, "_refresh_note_related_views"):
+                    self._refresh_note_related_views()
+                if restore_selection:
+                    self._restore_block_selection(unique_pairs)
+                return
+
+            self.refresh_ui(preserve_selection=preserve_selection)
+            if restore_selection:
+                self._restore_block_selection(unique_pairs)
+
     def on_note_selected(self, note, track):
         """音符或打击乐事件被选中。"""
         self.selected_note = note
-        self.selected_track = track
+        self._set_selected_editor_track(track)
         self.property_panel.set_note(note, track)
 
         message = format_sequence_item_message("已选中", note)
@@ -190,7 +271,13 @@ class MainWindowEditorOpsMixin:
         if note in track.notes:
             self.sequencer.remove_note(track, note, use_command=True)
 
-        self.refresh_ui()
+        if hasattr(self, "property_panel") and self.property_panel.current_note == note:
+            self.property_panel.set_note(None, None)
+
+        if not self._remove_note_block_ui(note, track):
+            self.refresh_ui()
+        elif hasattr(self, "_refresh_note_related_views"):
+            self._refresh_note_related_views()
         self.statusBar().showMessage(format_sequence_item_message("已删除", note))
 
     def on_notes_deleted(self, notes_and_tracks):
@@ -206,7 +293,10 @@ class MainWindowEditorOpsMixin:
         if commands:
             batch_command = BatchCommand(commands, f"批量删除 {len(commands)} 个音符")
             self.sequencer.command_history.execute_command(batch_command)
-            QTimer.singleShot(50, lambda: self.refresh_ui())
+            if not self._remove_note_blocks_ui(notes_and_tracks):
+                QTimer.singleShot(50, lambda: self.refresh_ui())
+            elif hasattr(self, "_refresh_note_related_views"):
+                self._refresh_note_related_views()
             self.statusBar().showMessage(f"已删除 {len(commands)} 个音符")
 
     def on_note_position_changed(self, note, track, old_start_time, new_start_time):
@@ -216,7 +306,11 @@ class MainWindowEditorOpsMixin:
             self.sequencer.move_note(track, note, new_start_time)
 
         self.statusBar().showMessage(f"音符已移动到: {new_start_time:.2f}s")
-        self.refresh_ui()
+        self._refresh_after_note_updates(
+            [(note, track)],
+            preserve_selection=True,
+            profile_operation="editor.move_note",
+        )
 
     def on_property_changed(self, note: Note, track: Track):
         """属性面板中的单音符属性改变。"""
@@ -225,6 +319,7 @@ class MainWindowEditorOpsMixin:
             note,
             self.sequencer.get_bpm(),
         )
+        adjusted_notes = []
 
         if kwargs:
             if "duration" in kwargs:
@@ -233,17 +328,35 @@ class MainWindowEditorOpsMixin:
                 duration_delta = new_duration - old_duration
                 self.sequencer.modify_note(track, note, **kwargs)
                 if abs(duration_delta) > 0.001:
-                    self.property_panel.adjust_following_notes(duration_delta)
+                    adjusted_notes = self.property_panel.adjust_following_notes(duration_delta) or []
             else:
                 self.sequencer.modify_note(track, note, **kwargs)
 
-        self.refresh_ui(preserve_selection=True)
+        if kwargs:
+            changed_pairs = [(note, track)] + [
+                (adjusted_note, track) for adjusted_note in adjusted_notes
+            ]
+            self._refresh_after_note_updates(
+                changed_pairs,
+                preserve_selection=True,
+                profile_operation="editor.property_change",
+            )
         if self.property_panel.current_note == note:
             self.property_panel.update_ui()
 
     def on_property_update_requested(self, note: Note, track: Track):
         """属性面板请求刷新 UI。"""
-        self.refresh_ui()
+        if note is None or track is None:
+            return
+
+        if self.property_panel.current_note == note:
+            self.property_panel.update_ui()
+
+        self._refresh_after_note_updates(
+            [(note, track)],
+            preserve_selection=True,
+            profile_operation="editor.property_update_request",
+        )
 
     def on_selection_changed(self):
         """序列编辑器选择变化。"""
@@ -315,8 +428,12 @@ class MainWindowEditorOpsMixin:
             self.sequencer.batch_modify_notes(notes_and_tracks, **kwargs)
 
         if kwargs or velocity_offset_applied:
-            self.refresh_ui(preserve_selection=True)
-            self._restore_block_selection(notes_and_tracks)
+            self._refresh_after_note_updates(
+                notes_and_tracks,
+                preserve_selection=True,
+                restore_selection=True,
+                profile_operation="editor.batch_property_change",
+            )
 
             if velocity_offset_applied:
                 offset_value = self.property_panel.batch_velocity_offset_spinbox.value()
@@ -328,15 +445,19 @@ class MainWindowEditorOpsMixin:
 
     def on_track_clicked(self, track: Track):
         """音轨被点击。"""
+        self._set_selected_editor_track(track)
         self.property_panel.set_track(track)
         self.sequence_widget.select_track_notes(track)
         self.statusBar().showMessage(
             f"已选中音轨: {track.name} ({count_track_items(track)} 个音符/事件)"
         )
 
-    def on_track_property_changed(self, track: Track):
+    def on_track_property_changed(self, track: Track, change_scope: str = "effects"):
         """音轨属性改变。"""
-        self.refresh_ui(preserve_selection=True)
+        if change_scope in {"structure", "presentation"}:
+            self.refresh_ui(preserve_selection=True, force_full_refresh=True)
+        elif not self._sync_track_ui(track):
+            self.refresh_ui(preserve_selection=True)
         self.statusBar().showMessage(f"已更新音轨: {track.name}")
 
     def on_track_deleted(self, track: Track):
@@ -394,7 +515,8 @@ class MainWindowEditorOpsMixin:
             return
 
         track.enabled = enabled
-        QTimer.singleShot(50, self.sequence_widget.refresh)
+        if hasattr(self, "_refresh_oscilloscope_widget"):
+            self._refresh_oscilloscope_widget()
         status = "启用" if enabled else "禁用"
         self.statusBar().showMessage(f"已{status}音轨: {track.name}")
 

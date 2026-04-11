@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from core.seed_music_generator import SeedMusicStyle
+from core.seed_style_catalog import SeedMusicStyle
 from ui.main_window_seed_ops import (
     build_seed_generation_request,
     build_seed_generation_settings,

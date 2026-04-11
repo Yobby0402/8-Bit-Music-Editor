@@ -4,12 +4,23 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from collections.abc import Sequence
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QAction, QMessageBox, QSpinBox
 
 from app_info import APP_NAME, APP_VERSION
+from core.command import (
+    AddNoteCommand,
+    BatchCommand,
+    BatchModifyNotesCommand,
+    CommandHistoryResult,
+    DeleteNoteCommand,
+    ModifyNoteCommand,
+    ModifyTrackCommand,
+    MoveNoteCommand,
+)
 from ui.main_window_dialogs import prompt_new_track
 
 SHORTCUT_BINDINGS = (
@@ -17,6 +28,78 @@ SHORTCUT_BINDINGS = (
     ("octave_down", "octave_down"),
     ("delete_last_note", "delete_last_note"),
 )
+
+
+@dataclass
+class HistoryRefreshPlan:
+    """Lightweight UI refresh plan derived from an undo/redo command."""
+
+    note_items_to_sync: list[tuple[object, object]] = field(default_factory=list)
+    note_items_to_remove: list[tuple[object, object]] = field(default_factory=list)
+    tracks_to_sync: list[object] = field(default_factory=list)
+    requires_full_refresh: bool = False
+
+
+def _append_unique_note_item(items: list[tuple[object, object]], note: object, track: object) -> None:
+    """Keep note refresh batches small and deterministic."""
+    note_key = (id(note), id(track))
+    if any((id(existing_note), id(existing_track)) == note_key for existing_note, existing_track in items):
+        return
+    items.append((note, track))
+
+
+def _append_unique_track(tracks: list[object], track: object) -> None:
+    """Avoid refreshing the same track presentation repeatedly."""
+    if any(id(existing_track) == id(track) for existing_track in tracks):
+        return
+    tracks.append(track)
+
+
+def _extend_history_refresh_plan(
+    plan: HistoryRefreshPlan,
+    command: object,
+    operation: str,
+) -> None:
+    """Collect refresh intents for supported undo/redo command types."""
+    if plan.requires_full_refresh:
+        return
+
+    if isinstance(command, BatchCommand):
+        for nested_command in command.commands:
+            _extend_history_refresh_plan(plan, nested_command, operation)
+        return
+
+    if isinstance(command, AddNoteCommand):
+        target_items = plan.note_items_to_remove if operation == "undo" else plan.note_items_to_sync
+        _append_unique_note_item(target_items, command.note, command.track)
+        return
+
+    if isinstance(command, DeleteNoteCommand):
+        target_items = plan.note_items_to_sync if operation == "undo" else plan.note_items_to_remove
+        _append_unique_note_item(target_items, command.note, command.track)
+        return
+
+    if isinstance(command, (ModifyNoteCommand, MoveNoteCommand)):
+        _append_unique_note_item(plan.note_items_to_sync, command.note, command.track)
+        return
+
+    if isinstance(command, BatchModifyNotesCommand):
+        for note, track in command.notes_and_tracks:
+            _append_unique_note_item(plan.note_items_to_sync, note, track)
+        return
+
+    if isinstance(command, ModifyTrackCommand):
+        _append_unique_track(plan.tracks_to_sync, command.track)
+        return
+
+    plan.requires_full_refresh = True
+
+
+def build_history_refresh_plan(history_result: CommandHistoryResult) -> HistoryRefreshPlan:
+    """Build the smallest safe UI refresh plan for an undo/redo result."""
+    plan = HistoryRefreshPlan()
+    _extend_history_refresh_plan(plan, history_result.command, history_result.operation)
+    return plan
 
 
 def build_about_text(app_name: str, app_version: str) -> str:
@@ -33,6 +116,13 @@ def get_first_segment_bpm(bpm_segments: Sequence[object]) -> float | None:
     if not bpm_segments:
         return None
     return float(bpm_segments[0].bpm)
+
+
+def get_first_tempo_event_bpm(tempo_events: Sequence[object]) -> float | None:
+    """获取 tempo event 列表中的首个 BPM。"""
+    if not tempo_events:
+        return None
+    return float(tempo_events[0].bpm)
 
 
 def find_category_index(category_names: Sequence[str], target_name: str) -> int | None:
@@ -75,16 +165,91 @@ class MainWindowAppOpsMixin:
             self.unified_editor.piano_keyboard.update_button_texts()
 
     def _refresh_after_settings_dialog(self):
-        """设置应用后刷新序列编辑器，避免局部状态残留。"""
-        if hasattr(self, "sequence_widget") and hasattr(self.sequencer, "project"):
-            try:
-                self.sequence_widget.set_tracks(
-                    self.sequencer.project.tracks,
-                    preserve_selection=True,
-                )
-                self.sequence_widget.refresh(force_full_refresh=True)
-            except Exception:
-                pass
+        """Finalize settings changes without triggering a second full UI refresh."""
+        self.setup_shortcuts()
+
+    def _refresh_property_panel_after_history_plan(self, plan: HistoryRefreshPlan):
+        """Keep property panel state consistent after lightweight undo/redo refreshes."""
+        if not hasattr(self, "property_panel"):
+            return
+
+        removed_keys = {
+            (id(note), id(track))
+            for note, track in plan.note_items_to_remove
+        }
+        synced_keys = {
+            (id(note), id(track))
+            for note, track in plan.note_items_to_sync
+        }
+
+        current_note = getattr(self.property_panel, "current_note", None)
+        current_track = getattr(self.property_panel, "current_track", None)
+        if current_note is not None and current_track is not None:
+            current_key = (id(current_note), id(current_track))
+            if current_key in removed_keys:
+                self.property_panel.set_note(None, None)
+                if getattr(self, "selected_note", None) is current_note:
+                    self.selected_note = None
+                    self.selected_track = None
+            elif current_key in synced_keys and hasattr(self.property_panel, "update_ui"):
+                self.property_panel.update_ui()
+
+        current_notes = list(getattr(self.property_panel, "current_notes", []) or [])
+        if current_notes:
+            remaining_notes = [
+                (note, track)
+                for note, track in current_notes
+                if (id(note), id(track)) not in removed_keys
+            ]
+            if len(remaining_notes) != len(current_notes):
+                if not remaining_notes:
+                    self.property_panel.set_note(None, None)
+                elif len(remaining_notes) == 1:
+                    note, track = remaining_notes[0]
+                    self.property_panel.set_note(note, track)
+                else:
+                    self.property_panel.set_notes(remaining_notes)
+
+        affected_tracks: list[object] = []
+        for note, track in plan.note_items_to_sync:
+            _append_unique_track(affected_tracks, track)
+        for note, track in plan.note_items_to_remove:
+            _append_unique_track(affected_tracks, track)
+        for track in plan.tracks_to_sync:
+            _append_unique_track(affected_tracks, track)
+
+        current_track_for_edit = getattr(self.property_panel, "current_track_for_edit", None)
+        if current_track_for_edit is not None and any(
+            id(track) == id(current_track_for_edit) for track in affected_tracks
+        ):
+            self.property_panel.set_track(current_track_for_edit)
+
+    def _refresh_after_history_result(self, history_result: CommandHistoryResult):
+        """Apply the lightest safe refresh path for undo/redo operations."""
+        plan = build_history_refresh_plan(history_result)
+        note_ui_changed = bool(plan.note_items_to_remove or plan.note_items_to_sync)
+        if plan.requires_full_refresh:
+            self.refresh_ui()
+            return
+
+        if plan.note_items_to_remove:
+            if not hasattr(self, "_remove_note_blocks_ui") or not self._remove_note_blocks_ui(plan.note_items_to_remove):
+                self.refresh_ui()
+                return
+
+        if plan.note_items_to_sync:
+            if not hasattr(self, "_sync_note_blocks_ui") or not self._sync_note_blocks_ui(plan.note_items_to_sync):
+                self.refresh_ui()
+                return
+
+        for track in plan.tracks_to_sync:
+            if not hasattr(self, "_sync_track_ui") or not self._sync_track_ui(track):
+                self.refresh_ui()
+                return
+
+        self._refresh_property_panel_after_history_plan(plan)
+        if note_ui_changed and not plan.tracks_to_sync and hasattr(self, "_refresh_note_related_views"):
+            self._refresh_note_related_views()
 
     def show_about(self):
         """显示关于对话框。"""
@@ -196,8 +361,23 @@ class MainWindowAppOpsMixin:
         if not hasattr(self, "sequencer") or not self.sequencer.project:
             return
 
-        self.sequencer.project.bpm_segments = bpm_segments
+        self.sequencer.project.replace_bpm_segments(bpm_segments)
         first_bpm = get_first_segment_bpm(bpm_segments)
+        if first_bpm is not None:
+            self.sequencer.project.bpm = first_bpm
+            self.bpm_spinbox.blockSignals(True)
+            self.bpm_spinbox.setValue(int(first_bpm))
+            self.bpm_spinbox.blockSignals(False)
+
+        self.refresh_ui()
+
+    def on_tempo_events_changed(self, tempo_events):
+        """Tempo 事件改变。"""
+        if not hasattr(self, "sequencer") or not self.sequencer.project:
+            return
+
+        self.sequencer.project.replace_tempo_events(tempo_events)
+        first_bpm = get_first_tempo_event_bpm(tempo_events)
         if first_bpm is not None:
             self.sequencer.project.bpm = first_bpm
             self.bpm_spinbox.blockSignals(True)
@@ -208,19 +388,21 @@ class MainWindowAppOpsMixin:
 
     def undo(self):
         """撤销操作。"""
-        description = self.sequencer.undo()
-        if description:
-            self.statusBar().showMessage(f"已撤销: {description}")
-            self.refresh_ui()
+        history_result = self.sequencer.undo()
+        self.update_undo_redo_state()
+        if history_result:
+            self.statusBar().showMessage(f"已撤销: {history_result.description}")
+            self._refresh_after_history_result(history_result)
             return
         self.statusBar().showMessage("无法撤销")
 
     def redo(self):
         """重做操作。"""
-        description = self.sequencer.redo()
-        if description:
-            self.statusBar().showMessage(f"已重做: {description}")
-            self.refresh_ui()
+        history_result = self.sequencer.redo()
+        self.update_undo_redo_state()
+        if history_result:
+            self.statusBar().showMessage(f"已重做: {history_result.description}")
+            self._refresh_after_history_result(history_result)
             return
         self.statusBar().showMessage("无法重做")
 
@@ -231,11 +413,14 @@ class MainWindowAppOpsMixin:
 
     def on_add_track_clicked(self):
         """添加音轨按钮点击。"""
-        result = prompt_new_track(self, len(self.sequencer.project.tracks))
-        if result is None:
+        selection = prompt_new_track(self, len(self.sequencer.project.tracks))
+        if selection is None:
             return
 
-        track_name, track_type = result
-        track = self.sequencer.add_track(name=track_name, track_type=track_type)
+        track = self.sequencer.add_track(
+            name=selection.name,
+            track_type=selection.track_type,
+            role=selection.role,
+        )
         self.refresh_ui()
         self.statusBar().showMessage(f"已添加音轨: {track.name}")

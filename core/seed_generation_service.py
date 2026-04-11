@@ -9,7 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from core.models import Project
-from core.seed_music_generator import SeedMusicStyle, generate_simple_project_from_seed
+from core.seed_music_generator import generate_simple_project_from_seed
+from core.seed_style_catalog import SeedMusicStyle
 
 
 @dataclass(frozen=True)

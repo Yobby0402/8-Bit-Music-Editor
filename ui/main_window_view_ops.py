@@ -125,8 +125,6 @@ class MainWindowViewOpsMixin:
                 self.oscilloscope_widget.set_tracks([])
                 self._show_oscilloscope_issue(issue_code)
 
-            self.oscilloscope_widget.update()
-
         self._set_view_index(index)
 
     def _get_selected_track(self):
@@ -159,7 +157,6 @@ class MainWindowViewOpsMixin:
             self.oscilloscope_widget.set_selected_tracks(enabled_tracks)
             self.oscilloscope_widget.set_tracks(enabled_tracks)
             self._set_view_index(1)
-            self.oscilloscope_widget.update()
             self.statusBar().showMessage(f"正在渲染 {len(enabled_tracks)} 个音轨的波形")
             return
 
@@ -235,5 +232,4 @@ class MainWindowViewOpsMixin:
         self.oscilloscope_widget.set_selected_tracks(selected_tracks)
         self.oscilloscope_widget.set_tracks(selected_tracks)
         self._set_view_index(1)
-        self.oscilloscope_widget.update()
         self.statusBar().showMessage(f"正在渲染 {len(selected_tracks)} 个音轨的波形")

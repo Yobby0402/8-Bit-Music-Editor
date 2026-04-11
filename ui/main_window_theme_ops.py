@@ -236,7 +236,7 @@ class MainWindowThemeOpsMixin:
         self._refresh_oscilloscope_theme()
 
         if hasattr(self, "refresh_ui"):
-            self.refresh_ui(preserve_selection=True, force_full_refresh=True)
+            self.refresh_ui(preserve_selection=True, force_full_refresh=False)
         self.repaint()
 
     def _restore_window_size(self, size):

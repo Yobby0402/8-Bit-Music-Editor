@@ -1,8 +1,10 @@
 from ui.main_window_theme_ops import (
+    MainWindowThemeOpsMixin,
     build_main_background_style,
     has_significant_size_change,
     sync_locked_dock_width,
 )
+from ui.theme import theme_manager
 
 
 class FakeDock:
@@ -85,3 +87,39 @@ def test_has_significant_size_change_respects_threshold():
 
     assert has_significant_size_change(current_size, similar_size) is False
     assert has_significant_size_change(current_size, changed_size) is True
+
+
+class FakeThemeWindow(MainWindowThemeOpsMixin):
+    def __init__(self):
+        self.refresh_calls = []
+        self.repaint_calls = 0
+        self.settings_manager = type(
+            "SettingsManager",
+            (),
+            {"get_playhead_refresh_interval": lambda self: 33},
+        )()
+        self.update_timer = None
+        self.sequence_widget = None
+        self.unified_editor = None
+        self.oscilloscope_widget = None
+
+    def apply_theme(self):
+        self.applied_theme = theme_manager.current_theme
+
+    def apply_display_settings_from_settings(self, *args, **kwargs):
+        self.display_settings_applied = True
+
+    def refresh_ui(self, preserve_selection=False, force_full_refresh=False):
+        self.refresh_calls.append((preserve_selection, force_full_refresh))
+
+    def repaint(self):
+        self.repaint_calls += 1
+
+
+def test_refresh_theme_from_settings_uses_incremental_refresh():
+    window = FakeThemeWindow()
+
+    window.refresh_theme_from_settings()
+
+    assert window.refresh_calls == [(True, False)]
+    assert window.repaint_calls == 1

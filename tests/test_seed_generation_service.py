@@ -1,7 +1,7 @@
 import pytest
 
 from core.seed_generation_service import SeedGenerationRequest, generate_seed_project
-from core.seed_music_generator import SeedMusicStyle
+from core.seed_style_catalog import SeedMusicStyle
 
 
 def test_seed_generation_request_normalized_strips_seed_and_defaults_variant():

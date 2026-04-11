@@ -133,6 +133,62 @@ def build_preview_track(snippet_type: str, data: dict) -> Track:
     return preview_track
 
 
+def apply_score_snippet_to_track(
+    sequencer,
+    target_track: Track,
+    snippet_type: str,
+    data: dict,
+    *,
+    base_time: float,
+    base_beat: float,
+    selected_waveform=None,
+) -> list[tuple[object, Track]]:
+    """Apply a score snippet to a track and return the added items."""
+    added_items: list[tuple[object, Track]] = []
+
+    if snippet_type == "drum":
+        for info in data.get("drums") or []:
+            drum_name = info.get("drum_type", "KICK")
+            try:
+                drum_type = getattr(DrumType, drum_name)
+            except AttributeError:
+                drum_type = DrumType.KICK
+
+            event = sequencer.add_drum_event(
+                target_track,
+                drum_type,
+                base_beat + float(info.get("offset_beats", 0.0)),
+                float(info.get("duration_beats", 1.0)),
+                velocity=int(info.get("velocity", 100)),
+            )
+            added_items.append((event, target_track))
+        return added_items
+
+    for info in data.get("notes") or []:
+        waveform_name = info.get("waveform", "") or "SQUARE"
+        duty_cycle = float(info.get("duty_cycle", 0.5))
+        note = sequencer.add_note(
+            target_track,
+            int(info.get("pitch", 60)),
+            base_time + float(info.get("offset", 0.0)),
+            float(info.get("duration", 0.25)),
+            velocity=int(info.get("velocity", 100)),
+        )
+        try:
+            note.waveform = (
+                selected_waveform
+                if selected_waveform is not None
+                else getattr(WaveformType, waveform_name)
+            )
+        except AttributeError:
+            pass
+        if hasattr(note, "duty_cycle"):
+            note.duty_cycle = duty_cycle
+        added_items.append((note, target_track))
+
+    return added_items
+
+
 class MainWindowScoreOpsMixin:
     """承载 MainWindow 中的乐谱片段相关流程。"""
 
@@ -156,6 +212,38 @@ class MainWindowScoreOpsMixin:
         """刷新乐谱片段面板。"""
         if hasattr(self, "score_panel"):
             self.score_panel.refresh()
+
+    def _refresh_after_score_apply(
+        self,
+        target_track: Track,
+        added_items: list[tuple[object, Track]],
+    ):
+        """Prefer lightweight UI sync after applying a score snippet."""
+        note_sync_ok = bool(
+            added_items
+            and hasattr(self, "_sync_note_blocks_ui")
+            and self._sync_note_blocks_ui(added_items)
+        )
+        if note_sync_ok:
+            if hasattr(self.sequence_widget, "set_highlighted_track"):
+                self.sequence_widget.set_highlighted_track(target_track)
+            track_refresh_ok = False
+            if hasattr(self, "_sync_track_ui"):
+                track_refresh_ok = self._sync_track_ui(target_track)
+            if not track_refresh_ok and hasattr(self, "_refresh_note_related_views"):
+                self._refresh_note_related_views()
+            return
+
+        if added_items:
+            self.refresh_ui(preserve_selection=False)
+            return
+
+        if hasattr(self, "_sync_track_ui") and self._sync_track_ui(target_track):
+            if hasattr(self.sequence_widget, "set_highlighted_track"):
+                self.sequence_widget.set_highlighted_track(target_track)
+            return
+
+        self.refresh_ui(preserve_selection=False)
 
     def on_score_create_from_selection(self):
         """从当前选区创建乐谱片段。"""
@@ -238,44 +326,16 @@ class MainWindowScoreOpsMixin:
             self.sequencer.get_bpm(),
         )
 
-        if snippet_type == "drum":
-            for info in data.get("drums") or []:
-                drum_name = info.get("drum_type", "KICK")
-                try:
-                    drum_type = getattr(DrumType, drum_name)
-                except AttributeError:
-                    drum_type = DrumType.KICK
-
-                self.sequencer.add_drum_event(
-                    target_track,
-                    drum_type,
-                    base_beat + float(info.get("offset_beats", 0.0)),
-                    float(info.get("duration_beats", 1.0)),
-                    velocity=int(info.get("velocity", 100)),
-                )
-        else:
-            for info in data.get("notes") or []:
-                waveform_name = info.get("waveform", "") or "SQUARE"
-                duty_cycle = float(info.get("duty_cycle", 0.5))
-                note = self.sequencer.add_note(
-                    target_track,
-                    int(info.get("pitch", 60)),
-                    base_time + float(info.get("offset", 0.0)),
-                    float(info.get("duration", 0.25)),
-                    velocity=int(info.get("velocity", 100)),
-                )
-                try:
-                    note.waveform = (
-                        selected_waveform
-                        if selected_waveform is not None
-                        else getattr(WaveformType, waveform_name)
-                    )
-                except AttributeError:
-                    pass
-                if hasattr(note, "duty_cycle"):
-                    note.duty_cycle = duty_cycle
-
-        self.refresh_ui(preserve_selection=False)
+        added_items = apply_score_snippet_to_track(
+            self.sequencer,
+            target_track,
+            snippet_type,
+            data,
+            base_time=base_time,
+            base_beat=base_beat,
+            selected_waveform=selected_waveform,
+        )
+        self._refresh_after_score_apply(target_track, added_items)
         self.statusBar().showMessage(
             f"已将乐谱片段“{snippet.get('name', '')}”应用到音轨：{target_track.name}"
         )

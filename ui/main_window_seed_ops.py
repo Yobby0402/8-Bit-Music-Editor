@@ -74,7 +74,7 @@ class MainWindowSeedOpsMixin:
         self._update_file_name_display()
         self._clear_project_panel_state()
         self._reset_project_selection()
-        self._sync_project_bpm_to_ui(float(project.bpm))
+        self._sync_project_bpm_to_ui(float(project.bpm), refresh_sequence_widget=False)
 
         self.current_seed_style = request.style
         self.current_seed_variant = request.variant_id

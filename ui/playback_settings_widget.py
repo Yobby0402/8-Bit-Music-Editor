@@ -95,6 +95,27 @@ class PlaybackSettingsWidget(QWidget):
         
         scroll_area.setWidget(self.scroll_content)
         layout.addWidget(scroll_area)
+
+    def _clear_track_layout(self) -> None:
+        """Remove all current track rows and spacers from the scroll layout."""
+        while self.scroll_layout.count():
+            item = self.scroll_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+
+    def _get_enabled_tracks_payload(self) -> dict[int, bool]:
+        """Build the current enabled-track mapping from the selection state."""
+        return {
+            id(track): id(track) in self.selected_track_ids
+            for track in self.tracks
+        }
+
+    def set_state(self, tracks: list, ratios: dict | None):
+        """Batch-update tracks and ratios with a single rebuild."""
+        self.tracks = tracks
+        self.track_volume_ratios = ratios.copy() if ratios else {}
+        self.refresh_tracks()
     
     def set_tracks(self, tracks: list):
         """设置音轨列表"""
@@ -108,10 +129,11 @@ class PlaybackSettingsWidget(QWidget):
     
     def refresh_tracks(self):
         """刷新音轨列表显示"""
-        # 清除现有控件
-        for widget_data in self.track_widgets.values():
-            widget_data['widget'].setParent(None)
+        # 清除现有控件和旧的拉伸项，避免布局项不断堆积
+        self._clear_track_layout()
         self.track_widgets.clear()
+        active_track_ids = {id(track) for track in self.tracks}
+        self.selected_track_ids.intersection_update(active_track_ids)
         
         # 为每个音轨创建控件
         # 默认所有音轨都被勾选（启用）
@@ -124,11 +146,9 @@ class PlaybackSettingsWidget(QWidget):
         
         self.scroll_layout.addStretch()
         
-        # 初始化时发出信号，确保所有音轨默认启用
+        # 初始化时发出信号，确保外部同步到最新勾选状态
         if self.tracks:
-            enabled_tracks = {id(t): True for t in self.tracks}
-            print(f"[DEBUG] playback_settings_widget.refresh_tracks - emitting initial enabled_tracks: {enabled_tracks}")
-            self.track_selection_changed.emit(enabled_tracks)
+            self.track_selection_changed.emit(self._get_enabled_tracks_payload())
     
     def create_track_volume_widget(self, track: Track, track_id: int) -> QWidget:
         """为单个音轨创建音量占比控件"""
@@ -222,8 +242,7 @@ class PlaybackSettingsWidget(QWidget):
             self.selected_track_ids.discard(track_id)
         
         # 发出信号通知勾选状态改变
-        enabled_tracks = {tid: tid in self.selected_track_ids for tid in self.track_widgets.keys()}
-        self.track_selection_changed.emit(enabled_tracks)
+        self.track_selection_changed.emit(self._get_enabled_tracks_payload())
     
     def select_all(self):
         """全选所有音轨"""
@@ -278,7 +297,6 @@ class PlaybackSettingsWidget(QWidget):
             widget_data['name_label'].setFont(font)
         
         # 发出信号
-        print(f"[DEBUG] playback_settings_widget.on_ratio_changed - emitting: {self.track_volume_ratios}")
         self.volume_ratios_changed.emit(self.track_volume_ratios.copy())
     
     def on_main_clicked(self, checked: bool, track_id: int, slider: QSlider, ratio_label: QLabel):
@@ -295,10 +313,8 @@ class PlaybackSettingsWidget(QWidget):
             self.track_volume_ratios[track_id] = 0.5
         
         # 发出信号
-        print(f"[DEBUG] playback_settings_widget.on_main_clicked - emitting: {self.track_volume_ratios}")
         self.volume_ratios_changed.emit(self.track_volume_ratios.copy())
     
     def get_volume_ratios(self) -> dict:
         """获取所有音轨的音量占比"""
         return self.track_volume_ratios.copy()
-

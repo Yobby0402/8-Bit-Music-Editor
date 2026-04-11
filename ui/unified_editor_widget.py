@@ -38,7 +38,7 @@ class UnifiedEditorWidget(QWidget):
         # 默认值
         self.selected_waveform = WaveformType.SQUARE
         self.selected_duration = 1.0
-        self.current_track_type = "melody"  # "melody" 或 "bass"
+        self.current_entry_role = "melody"  # 当前录入角色模式："melody" 或 "bass"
         self.insert_mode = "sequential"  # "sequential" 或 "playhead" - 插入模式
         self.selected_track = None  # 当前选中的目标音轨
         
@@ -366,17 +366,24 @@ class UnifiedEditorWidget(QWidget):
         """波形选择"""
         self.selected_waveform = waveform
         self.update_preview_params()
-    
+
+    @property
+    def current_track_type(self) -> str:
+        """Backward-compatible alias for the old editor mode name."""
+        return self.current_entry_role
+
+    @current_track_type.setter
+    def current_track_type(self, value: str) -> None:
+        self.current_entry_role = value
+
+    def on_entry_role_selected(self, role: str):
+        """录入角色模式选择。"""
+        self.current_entry_role = role
+        self.update_preview_params()
+
     def on_track_type_selected(self, track_type: str):
-        """音轨类型选择"""
-        self.current_track_type = track_type
-        # 当切换到低音时，使用三角波作为默认预览波形
-        if track_type == "bass":
-            # 如果当前波形不是三角波，可以选择自动切换，或者保持用户选择
-            # 这里我们保持用户选择的波形，但更新预览参数
-            self.update_preview_params()
-        else:
-            self.update_preview_params()
+        """Backward-compatible alias for the old handler name."""
+        self.on_entry_role_selected(track_type)
     
     def on_insert_mode_selected(self, mode: str):
         """插入模式选择"""
@@ -387,10 +394,12 @@ class UnifiedEditorWidget(QWidget):
         self.selected_track = track
     
     def update_preview_params(self):
-        """更新预览参数（根据当前音轨类型）"""
-        # 如果是低音，使用三角波作为预览（即使用户选择了其他波形，预览也用三角波）
-        # 如果是主旋律，使用用户选择的波形
-        preview_waveform = WaveformType.TRIANGLE if self.current_track_type == "bass" else self.selected_waveform
+        """更新预览参数（根据当前录入角色模式）。"""
+        preview_waveform = (
+            WaveformType.TRIANGLE
+            if self.current_entry_role == "bass"
+            else self.selected_waveform
+        )
         self.piano_keyboard.set_preview_params(preview_waveform, self.selected_duration, self.bpm)
     
     def on_duration_selected(self, beats: float):
@@ -409,14 +418,14 @@ class UnifiedEditorWidget(QWidget):
         self.piano_keyboard.play_preview()
         
         # 添加音符
-        if self.current_track_type == "melody":
+        if self.current_entry_role == "melody":
             self.add_melody_note.emit(pitch, self.selected_duration, self.selected_waveform, self.selected_track, self.insert_mode)
         else:  # bass
             self.add_bass_event.emit(pitch, self.selected_duration, self.selected_waveform, self.selected_track, self.insert_mode)
     
     def on_rest_clicked(self):
         """休止符点击"""
-        if self.current_track_type == "melody":
+        if self.current_entry_role == "melody":
             self.add_melody_note.emit(0, self.selected_duration, self.selected_waveform, self.selected_track, self.insert_mode)
         else:  # bass
             self.add_bass_event.emit(0, self.selected_duration, self.selected_waveform, self.selected_track, self.insert_mode)
@@ -697,4 +706,3 @@ class UnifiedEditorWidget(QWidget):
                 btn.setChecked(True)
             else:
                 btn.setChecked(False)
-

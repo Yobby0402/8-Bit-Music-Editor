@@ -4,6 +4,8 @@
 用于编辑选中音符的属性（音高、时长、力度、波形、ADSR等）。
 """
 
+from __future__ import annotations
+
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -13,6 +15,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSlider,
     QSpinBox,
@@ -26,9 +29,175 @@ from core.effect_processor import (
     FilterType,
     TremoloParams,
 )
-from core.models import Note, Track, TrackType, WaveformType
+from core.models import Note, Track, TrackRole, TrackType, WaveformType, infer_track_role
 from core.track_events import DrumEvent
 from ui.theme import theme_manager
+
+TIMING_SNAP_BEATS = 0.25
+TRACK_PROPERTY_CHANGE_EFFECTS = "effects"
+TRACK_PROPERTY_CHANGE_METADATA = "metadata"
+TRACK_PROPERTY_CHANGE_PRESENTATION = "presentation"
+TRACK_PROPERTY_CHANGE_STRUCTURE = "structure"
+
+
+def build_note_sort_key(note: Note, project=None) -> tuple[float, float, int]:
+    """Build a stable note sort key preferring musical time when available."""
+    if project is not None:
+        return (
+            float(note.get_start_tick(project)),
+            float(note.start_time),
+            int(note.pitch),
+        )
+    return (float(note.start_time), float(note.duration), int(note.pitch))
+
+
+def snap_tick_to_grid(tick: int, grid_ticks: int) -> int:
+    """Snap a tick position to the nearest grid boundary."""
+    safe_tick = max(0, int(tick))
+    safe_grid_ticks = max(1, int(grid_ticks))
+    return int(round(safe_tick / safe_grid_ticks) * safe_grid_ticks)
+
+
+def get_track_type_editor_index(track: Track) -> int:
+    """Map the canonical track type to the property-panel combo index."""
+    return 1 if track.track_type == TrackType.DRUM_TRACK else 0
+
+
+def resolve_track_type_from_editor_index(index: int) -> TrackType:
+    """Resolve the property-panel combo index to the canonical track type."""
+    return TrackType.DRUM_TRACK if index == 1 else TrackType.NOTE_TRACK
+
+
+TRACK_ROLE_EDITOR_OPTIONS: tuple[tuple[str, TrackRole], ...] = (
+    ("主旋律", TrackRole.MELODY),
+    ("低音", TrackRole.BASS),
+    ("和声", TrackRole.HARMONY),
+    ("效果", TrackRole.EFFECT),
+)
+
+
+def get_track_role_editor_index(track: Track) -> int:
+    """Map the canonical track role to the property-panel combo index."""
+    role = track.role or TrackRole.MELODY
+    for index, (_, candidate_role) in enumerate(TRACK_ROLE_EDITOR_OPTIONS):
+        if candidate_role == role:
+            return index
+    return 0
+
+
+def resolve_track_role_from_editor_index(index: int) -> TrackRole:
+    """Resolve the property-panel combo index to the canonical track role."""
+    if 0 <= index < len(TRACK_ROLE_EDITOR_OPTIONS):
+        return TRACK_ROLE_EDITOR_OPTIONS[index][1]
+    return TrackRole.MELODY
+
+
+def can_change_track_type_on_existing_track(track: Track, new_track_type: TrackType) -> bool:
+    """Only allow cross-type switching on empty tracks to avoid silent data hiding."""
+    if track.track_type == new_track_type:
+        return True
+    return not track.notes and not track.drum_events
+
+
+def resolve_note_timing_for_start_time(
+    note: Note,
+    project,
+    new_start_time: float,
+    *,
+    snap_to_beat: bool = False,
+    snap_beats: float = TIMING_SNAP_BEATS,
+) -> tuple[int, int] | None:
+    """Resolve a start-time edit into tick timing while keeping the note end fixed."""
+    old_start_tick = note.get_start_tick(project)
+    old_duration_ticks = note.get_duration_ticks(project)
+    old_end_tick = old_start_tick + old_duration_ticks
+    new_start_tick = project.seconds_to_ticks(new_start_time)
+    if snap_to_beat:
+        new_start_tick = snap_tick_to_grid(new_start_tick, project.beats_to_ticks(snap_beats))
+    if new_start_tick >= old_end_tick:
+        return None
+    return new_start_tick, old_end_tick - new_start_tick
+
+
+def resolve_note_timing_for_end_time(
+    note: Note,
+    project,
+    new_end_time: float,
+    *,
+    snap_to_beat: bool = False,
+    snap_beats: float = TIMING_SNAP_BEATS,
+) -> tuple[int, int] | None:
+    """Resolve an end-time edit into tick timing while keeping the note start fixed."""
+    start_tick = note.get_start_tick(project)
+    new_end_tick = project.seconds_to_ticks(new_end_time)
+    if snap_to_beat:
+        new_end_tick = snap_tick_to_grid(new_end_tick, project.beats_to_ticks(snap_beats))
+    if new_end_tick <= start_tick:
+        return None
+    return start_tick, new_end_tick - start_tick
+
+
+def resolve_note_timing_for_duration_beats(
+    note: Note,
+    project,
+    duration_beats: float,
+    *,
+    snap_to_beat: bool = False,
+    snap_beats: float = TIMING_SNAP_BEATS,
+) -> tuple[int, int] | None:
+    """Resolve a duration edit expressed in beats into tick timing."""
+    start_tick = note.get_start_tick(project)
+    duration_ticks = project.beats_to_ticks(duration_beats)
+    if snap_to_beat:
+        duration_ticks = snap_tick_to_grid(duration_ticks, project.beats_to_ticks(snap_beats))
+    if duration_ticks <= 0:
+        return None
+    return start_tick, duration_ticks
+
+
+def shift_contiguous_following_notes_by_ticks(
+    current_note: Note,
+    following_notes: list[Note],
+    project,
+    *,
+    old_end_tick: int,
+    new_end_tick: int,
+    tolerance_ticks: int = 1,
+) -> list[Note]:
+    """Shift a contiguous note chain after a duration change using tick timing."""
+    if not following_notes:
+        return []
+
+    note_infos = [
+        (
+            note,
+            note.get_start_tick(project),
+            note.get_duration_ticks(project),
+        )
+        for note in following_notes
+    ]
+
+    first_note, first_original_start_tick, first_duration_ticks = note_infos[0]
+    if first_original_start_tick > old_end_tick + max(0, tolerance_ticks):
+        return []
+
+    adjusted_notes: list[Note] = []
+    next_start_tick = new_end_tick
+    previous_original_end_tick = first_original_start_tick + first_duration_ticks
+
+    first_note.apply_tick_timing(project, next_start_tick, first_duration_ticks)
+    adjusted_notes.append(first_note)
+    next_start_tick += first_duration_ticks
+
+    for note, original_start_tick, duration_ticks in note_infos[1:]:
+        if original_start_tick > previous_original_end_tick + max(0, tolerance_ticks):
+            break
+        note.apply_tick_timing(project, next_start_tick, duration_ticks)
+        adjusted_notes.append(note)
+        next_start_tick += duration_ticks
+        previous_original_end_tick = original_start_tick + duration_ticks
+
+    return adjusted_notes
 
 
 class PropertyPanelWidget(QWidget):
@@ -38,13 +207,14 @@ class PropertyPanelWidget(QWidget):
     property_changed = pyqtSignal(Note, Track)  # 属性改变（单个音符）
     property_update_requested = pyqtSignal(Note, Track)  # 请求更新UI显示
     batch_property_changed = pyqtSignal(list)  # 批量属性改变 [(note, track), ...]
-    track_property_changed = pyqtSignal(Track)  # 音轨属性改变
+    track_property_changed = pyqtSignal(Track, str)  # 音轨属性改变
     
     def __init__(self, parent=None):
         """初始化属性面板"""
         super().__init__(parent)
         
         self.current_note: Note = None
+        self.project = None
         self.current_track: Track = None
         self.current_notes: list = []  # 多选音符列表 [(note, track), ...]
         self.current_track_for_edit: Track = None  # 当前编辑的音轨
@@ -139,11 +309,26 @@ class PropertyPanelWidget(QWidget):
         track_type_layout = QHBoxLayout()
         track_type_layout.addWidget(QLabel("音轨类型:"))
         self.track_type_combo = QComboBox()
-        self.track_type_combo.addItems(["主旋律", "低音", "打击乐"])
+        self.track_type_combo.addItems(["音符音轨", "打击乐音轨"])
         self.track_type_combo.currentIndexChanged.connect(self.on_track_type_changed)
         track_type_layout.addWidget(self.track_type_combo)
         track_type_layout.addStretch()
         track_edit_layout.addLayout(track_type_layout)
+
+        # 音轨角色选择
+        self.track_role_row_widget = QWidget()
+        track_role_layout = QHBoxLayout()
+        track_role_layout.setContentsMargins(0, 0, 0, 0)
+        self.track_role_row_widget.setLayout(track_role_layout)
+        track_role_layout.addWidget(QLabel("音轨角色:"))
+        self.track_role_combo = QComboBox()
+        self.track_role_combo.addItems(
+            [label for label, _ in TRACK_ROLE_EDITOR_OPTIONS]
+        )
+        self.track_role_combo.currentIndexChanged.connect(self.on_track_role_changed)
+        track_role_layout.addWidget(self.track_role_combo)
+        track_role_layout.addStretch()
+        track_edit_layout.addWidget(self.track_role_row_widget)
         
         # 音轨名称编辑
         track_name_layout = QHBoxLayout()
@@ -712,6 +897,7 @@ class PropertyPanelWidget(QWidget):
             self.batch_edit_group.setVisible(False)
             self.track_edit_group.setVisible(False)
             self.multi_select_label.setVisible(False)
+            self.track_role_row_widget.setVisible(False)
         else:
             # 显示音轨编辑和批量编辑（同时显示）
             self.empty_label.setVisible(False)
@@ -739,20 +925,14 @@ class PropertyPanelWidget(QWidget):
             # 更新音轨信息
             self.track_name_edit.setText(track.name)
             
-            # 根据音轨类型设置类型选择框
-            # 在设置索引前先阻塞信号，避免触发on_track_type_changed
+            # 根据真实结构类型设置类型选择框。
             self.track_type_combo.blockSignals(True)
-            if track.track_type == TrackType.DRUM_TRACK:
-                self.track_type_combo.setCurrentIndex(2)  # 打击乐
-            else:
-                # 音符音轨，根据名称判断（可选）
-                if track.name == "主旋律":
-                    self.track_type_combo.setCurrentIndex(0)
-                elif track.name == "低音":
-                    self.track_type_combo.setCurrentIndex(1)
-                else:
-                    self.track_type_combo.setCurrentIndex(0)  # 默认主旋律
+            self.track_type_combo.setCurrentIndex(get_track_type_editor_index(track))
             self.track_type_combo.blockSignals(False)
+            self.track_role_combo.blockSignals(True)
+            self.track_role_combo.setCurrentIndex(get_track_role_editor_index(track))
+            self.track_role_combo.blockSignals(False)
+            self._refresh_track_role_editor(track)
             # 进入音轨批量编辑模式时，同样重置"脏标记"
             self._batch_waveform_dirty = False
             self._batch_velocity_dirty = False
@@ -762,7 +942,48 @@ class PropertyPanelWidget(QWidget):
             self.batch_velocity_offset_spinbox.blockSignals(True)
             self.batch_velocity_offset_spinbox.setValue(0)
             self.batch_velocity_offset_spinbox.blockSignals(False)
+
+    def _refresh_track_role_editor(self, track: Track | None) -> None:
+        """Show the role editor only for note tracks."""
+        self.track_role_row_widget.setVisible(
+            track is not None and track.track_type == TrackType.NOTE_TRACK
+        )
     
+    def set_project(self, project):
+        """Set the project used for beat/second conversion."""
+        self.project = project
+        if self.current_note is not None:
+            self.update_ui()
+
+    def _safe_bpm(self) -> float:
+        return self.bpm if self.bpm > 0 else 120.0
+
+    def _seconds_to_beats(self, seconds: float) -> float:
+        if self.project is not None:
+            return self.project.seconds_to_beats(seconds)
+        return max(0.0, seconds) * self._safe_bpm() / 60.0
+
+    def _beats_to_seconds(self, beats: float) -> float:
+        if self.project is not None:
+            return self.project.beats_to_seconds(beats)
+        return max(0.0, beats) * 60.0 / self._safe_bpm()
+
+    def _duration_seconds_to_beats(self, start_time: float, duration: float) -> float:
+        start_beat = self._seconds_to_beats(start_time)
+        end_beat = self._seconds_to_beats(start_time + duration)
+        return max(0.0, end_beat - start_beat)
+
+    def _is_snap_to_beat_enabled(self) -> bool:
+        from ui.settings_manager import get_settings_manager
+
+        return get_settings_manager().is_snap_to_beat_enabled()
+
+    def _sort_current_track_notes(self) -> None:
+        if self.current_track and self.current_track.track_type == TrackType.NOTE_TRACK:
+            self.current_track.notes.sort(
+                key=lambda note: build_note_sort_key(note, self.project)
+            )
+
     def update_ui(self):
         """更新UI显示"""
         if self.current_note is None:
@@ -791,7 +1012,7 @@ class PropertyPanelWidget(QWidget):
         self.end_time_spinbox.blockSignals(False)
         
         # 更新时长（将秒数转换为节拍数）
-        duration_beats = note.duration * self.bpm / 60.0
+        duration_beats = self._duration_seconds_to_beats(note.start_time, note.duration)
         self.duration_spinbox.blockSignals(True)
         self.duration_spinbox.setValue(duration_beats)
         self.duration_spinbox.blockSignals(False)
@@ -887,7 +1108,9 @@ class PropertyPanelWidget(QWidget):
         
         # 将节拍数转换为秒数
         duration_beats = self.duration_spinbox.value()
-        duration_seconds = duration_beats * 60.0 / self.bpm
+        duration_seconds = self._beats_to_seconds(
+            self._seconds_to_beats(self.current_note.start_time) + duration_beats
+        ) - self.current_note.start_time
         self.duration_seconds_label.setText(f"({duration_seconds:.3f}秒)")
     
     def on_pitch_changed(self, value: int):
@@ -900,128 +1123,182 @@ class PropertyPanelWidget(QWidget):
     def on_start_time_changed(self, value: float):
         """开始时间改变"""
         if self.current_note and self.current_track:
-            # 根据设置决定是否对齐
-            from ui.settings_manager import get_settings_manager
-            settings_manager = get_settings_manager()
-            
             new_start_time = value
-            if settings_manager.is_snap_to_beat_enabled():
-                # 对齐到最近的1/4拍
-                beats_per_second = self.bpm / 60.0
-                start_beats = new_start_time * beats_per_second
+            if self.project is not None:
+                timing = resolve_note_timing_for_start_time(
+                    self.current_note,
+                    self.project,
+                    new_start_time,
+                    snap_to_beat=self._is_snap_to_beat_enabled(),
+                )
+                if timing is not None:
+                    self.current_note.apply_tick_timing(self.project, *timing)
+                    self._sort_current_track_notes()
+                    self.update_ui()
+                    self.property_changed.emit(self.current_note, self.current_track)
+                return
+
+            if self._is_snap_to_beat_enabled():
+                start_beats = self._seconds_to_beats(new_start_time)
                 start_beats = round(start_beats * 4) / 4
-                new_start_time = start_beats / beats_per_second
-                # 更新显示
+                new_start_time = self._beats_to_seconds(start_beats)
                 self.start_time_spinbox.blockSignals(True)
                 self.start_time_spinbox.setValue(new_start_time)
                 self.start_time_spinbox.blockSignals(False)
-            
-            # 计算新的时长（保持结束时间不变）
+
             old_start_time = self.current_note.start_time
             old_end_time = old_start_time + self.current_note.duration
             new_duration = old_end_time - new_start_time
-            
-            # 确保时长大于0
+
             if new_duration > 0:
                 self.current_note.start_time = new_start_time
                 self.current_note.duration = new_duration
-                
-                # 更新UI显示
-                duration_beats = new_duration * self.bpm / 60.0
+                self.current_note.sync_tick_timing(self.project, prefer_existing=False) if self.project else None
+                duration_beats = self._duration_seconds_to_beats(new_start_time, new_duration)
                 self.duration_spinbox.blockSignals(True)
                 self.duration_spinbox.setValue(duration_beats)
                 self.duration_spinbox.blockSignals(False)
                 self.update_duration_seconds()
-                
+
                 self.end_time_spinbox.blockSignals(True)
                 self.end_time_spinbox.setValue(old_end_time)
                 self.end_time_spinbox.blockSignals(False)
-                
+
                 self.property_changed.emit(self.current_note, self.current_track)
     
     def on_end_time_changed(self, value: float):
         """结束时间改变"""
         if self.current_note and self.current_track:
-            # 根据设置决定是否对齐
-            from ui.settings_manager import get_settings_manager
-            settings_manager = get_settings_manager()
-            
             new_end_time = value
-            if settings_manager.is_snap_to_beat_enabled():
-                # 对齐到最近的1/4拍
-                beats_per_second = self.bpm / 60.0
-                end_beats = new_end_time * beats_per_second
+            if self.project is not None:
+                timing = resolve_note_timing_for_end_time(
+                    self.current_note,
+                    self.project,
+                    new_end_time,
+                    snap_to_beat=self._is_snap_to_beat_enabled(),
+                )
+                if timing is not None:
+                    self.current_note.apply_tick_timing(self.project, *timing)
+                    self._sort_current_track_notes()
+                    self.update_ui()
+                    self.property_changed.emit(self.current_note, self.current_track)
+                return
+
+            if self._is_snap_to_beat_enabled():
+                end_beats = self._seconds_to_beats(new_end_time)
                 end_beats = round(end_beats * 4) / 4
-                new_end_time = end_beats / beats_per_second
-                # 更新显示
+                new_end_time = self._beats_to_seconds(end_beats)
                 self.end_time_spinbox.blockSignals(True)
                 self.end_time_spinbox.setValue(new_end_time)
                 self.end_time_spinbox.blockSignals(False)
-            
-            # 计算新的时长
+
             start_time = self.current_note.start_time
             new_duration = new_end_time - start_time
-            
-            # 确保时长大于0且结束时间大于开始时间
+
             if new_duration > 0 and new_end_time > start_time:
                 self.current_note.duration = new_duration
-                
-                # 更新UI显示
-                duration_beats = new_duration * self.bpm / 60.0
+                self.current_note.sync_tick_timing(self.project, prefer_existing=False) if self.project else None
+                duration_beats = self._duration_seconds_to_beats(start_time, new_duration)
                 self.duration_spinbox.blockSignals(True)
                 self.duration_spinbox.setValue(duration_beats)
                 self.duration_spinbox.blockSignals(False)
                 self.update_duration_seconds()
-                
+
             self.property_changed.emit(self.current_note, self.current_track)
     
     def on_duration_changed(self, value: float):
         """时长改变（value是节拍数）"""
-        # 将节拍数转换为秒数
-        duration_seconds = value * 60.0 / self.bpm
-        self.update_duration_seconds()
         if self.current_note and self.current_track:
-            # 根据设置决定是否对齐
-            from ui.settings_manager import get_settings_manager
-            settings_manager = get_settings_manager()
-            
-            if settings_manager.is_snap_to_beat_enabled():
-                # 对齐时长到最近的1/4拍
-                duration_beats = duration_seconds * self.bpm / 60.0
+            if self.project is not None:
+                timing = resolve_note_timing_for_duration_beats(
+                    self.current_note,
+                    self.project,
+                    value,
+                    snap_to_beat=self._is_snap_to_beat_enabled(),
+                )
+                if timing is None:
+                    self.update_duration_seconds()
+                    return
+
+                old_start_tick = self.current_note.get_start_tick(self.project)
+                old_duration_ticks = self.current_note.get_duration_ticks(self.project)
+                old_end_tick = old_start_tick + old_duration_ticks
+                self.current_note.apply_tick_timing(self.project, *timing)
+                new_duration_ticks = self.current_note.get_duration_ticks(self.project)
+                duration_delta_ticks = new_duration_ticks - old_duration_ticks
+
+                self.end_time_spinbox.blockSignals(True)
+                self.end_time_spinbox.setValue(self.current_note.start_time + self.current_note.duration)
+                self.end_time_spinbox.blockSignals(False)
+                self.update_duration_seconds()
+
+                if duration_delta_ticks != 0:
+                    adjusted_notes = self.adjust_following_notes(
+                        0.0,
+                        old_end_tick=old_end_tick,
+                        duration_delta_ticks=duration_delta_ticks,
+                    )
+                    if adjusted_notes:
+                        from PyQt5.QtCore import QTimer
+
+                        QTimer.singleShot(
+                            0,
+                            lambda: self.property_changed.emit(self.current_note, self.current_track),
+                        )
+                        return
+
+                self._sort_current_track_notes()
+                self.update_ui()
+                self.property_changed.emit(self.current_note, self.current_track)
+                return
+
+            duration_seconds = self._beats_to_seconds(
+                self._seconds_to_beats(self.current_note.start_time) + value
+            ) - self.current_note.start_time
+            self.update_duration_seconds()
+
+            if self._is_snap_to_beat_enabled():
+                duration_beats = self._duration_seconds_to_beats(
+                    self.current_note.start_time,
+                    duration_seconds,
+                )
                 duration_beats = round(duration_beats * 4) / 4
-                duration_seconds = duration_beats * 60.0 / self.bpm
-                # 更新显示
+                duration_seconds = self._beats_to_seconds(
+                    self._seconds_to_beats(self.current_note.start_time) + duration_beats
+                ) - self.current_note.start_time
                 self.duration_spinbox.blockSignals(True)
                 self.duration_spinbox.setValue(duration_beats)
                 self.duration_spinbox.blockSignals(False)
                 self.update_duration_seconds()
-            
+
             old_duration = self.current_note.duration
             new_duration = duration_seconds
             duration_delta = new_duration - old_duration
-            
-            # 更新当前音符的时长
+
             self.current_note.duration = new_duration
-            
-            # 更新结束时间显示
+
             new_end_time = self.current_note.start_time + new_duration
             self.end_time_spinbox.blockSignals(True)
             self.end_time_spinbox.setValue(new_end_time)
             self.end_time_spinbox.blockSignals(False)
-            
-            # 如果时长改变，需要调整后续音符的位置
-            if abs(duration_delta) > 0.001:  # 如果时长有变化
+
+            if abs(duration_delta) > 0.001:
                 adjusted_notes = self.adjust_following_notes(duration_delta)
-                # 如果有后续音符被调整，需要立即刷新UI
                 if adjusted_notes:
-                    # 发出信号通知UI刷新（使用QTimer确保在下一个事件循环中刷新）
                     from PyQt5.QtCore import QTimer
+
                     QTimer.singleShot(0, lambda: self.property_changed.emit(self.current_note, self.current_track))
                     return
-            
+
             self.property_changed.emit(self.current_note, self.current_track)
     
-    def adjust_following_notes(self, duration_delta: float):
+    def adjust_following_notes(
+        self,
+        duration_delta: float,
+        *,
+        old_end_tick: int | None = None,
+        duration_delta_ticks: int | None = None,
+    ):
         """调整后续音符的位置，使它们保持连续
         
         Returns:
@@ -1029,61 +1306,73 @@ class PropertyPanelWidget(QWidget):
         """
         if not self.current_note or not self.current_track:
             return []
-        
-        # 计算当前音符的新结束时间
-        current_note_end = self.current_note.start_time + self.current_note.duration
-        
-        # 获取同一轨道上所有音符，按开始时间排序
-        # 注意：需要先按旧的start_time排序，因为我们要基于旧位置判断
-        all_notes = sorted(self.current_track.notes, key=lambda n: n.start_time)
-        
-        # 找到当前音符在列表中的位置
+
+        all_notes = sorted(
+            self.current_track.notes,
+            key=lambda note: build_note_sort_key(note, self.project),
+        )
+
         current_index = -1
-        for i, note in enumerate(all_notes):
+        for index, note in enumerate(all_notes):
             if note == self.current_note:
-                current_index = i
+                current_index = index
                 break
-        
+
         if current_index == -1:
             return []
-        
-        # 获取当前音符之后的所有音符
+
         following_notes = all_notes[current_index + 1:]
-        
         if not following_notes:
             return []
-        
-        # 计算旧结束时间（用于判断哪些音符需要调整）
+
+        if self.project is not None:
+            current_start_tick = self.current_note.get_start_tick(self.project)
+            current_duration_ticks = self.current_note.get_duration_ticks(self.project)
+            current_end_tick = current_start_tick + current_duration_ticks
+            if duration_delta_ticks is None:
+                duration_delta_ticks = int(
+                    round(
+                        self.project.seconds_to_ticks(self.current_note.duration)
+                        - self.project.seconds_to_ticks(
+                            max(0.0, self.current_note.duration - duration_delta)
+                        )
+                    )
+                )
+            if old_end_tick is None:
+                old_end_tick = current_end_tick - duration_delta_ticks
+
+            adjusted_notes = shift_contiguous_following_notes_by_ticks(
+                self.current_note,
+                following_notes,
+                self.project,
+                old_end_tick=old_end_tick,
+                new_end_tick=current_end_tick,
+            )
+            if adjusted_notes:
+                self._sort_current_track_notes()
+            return adjusted_notes
+
+        current_note_end = self.current_note.start_time + self.current_note.duration
         old_end_time = self.current_note.start_time + (self.current_note.duration - duration_delta)
-        
-        # 记录哪些音符被调整了
         adjusted_notes = []
-        
-        # 调整后续音符的位置
-        # 如果第一个后续音符紧接在当前音符之后（没有间隙或间隙很小），则调整它
+
         first_following = following_notes[0]
-        if first_following.start_time <= old_end_time + 0.01:  # 允许很小的误差
-            # 这个音符紧接在当前音符之后，调整它的位置
+        if first_following.start_time <= old_end_time + 0.01:
             first_following.start_time = current_note_end
             adjusted_notes.append(first_following)
             current_note_end = first_following.start_time + first_following.duration
-            
-            # 继续调整后续的音符，使它们保持连续
+
             for i in range(1, len(following_notes)):
                 note = following_notes[i]
-                # 如果这个音符紧接在前一个音符之后，调整它
-                prev_note = following_notes[i-1]
-                # 使用更新后的位置计算前一个音符的结束时间
+                prev_note = following_notes[i - 1]
                 prev_end = prev_note.start_time + prev_note.duration
-                if note.start_time <= prev_end + 0.01:  # 紧接在前一个之后
+                if note.start_time <= prev_end + 0.01:
                     note.start_time = prev_end
                     adjusted_notes.append(note)
                     current_note_end = note.start_time + note.duration
                 else:
-                    # 如果有间隙，停止调整
                     break
-        
-        # 返回被调整的音符列表
+
         return adjusted_notes
     
     def on_velocity_changed(self, value: int):
@@ -1132,7 +1421,10 @@ class PropertyPanelWidget(QWidget):
         # 如果当前有选中的音符，需要更新显示
         if self.current_note:
             # 重新计算节拍数显示
-            duration_beats = self.current_note.duration * self.bpm / 60.0
+            duration_beats = self._duration_seconds_to_beats(
+                self.current_note.start_time,
+                self.current_note.duration,
+            )
             self.duration_spinbox.blockSignals(True)
             self.duration_spinbox.setValue(duration_beats)
             self.duration_spinbox.blockSignals(False)
@@ -1215,7 +1507,7 @@ class PropertyPanelWidget(QWidget):
         track = self.current_track_for_edit if self.current_track_for_edit else self.current_track
         if track and track.filter_params:
             track.filter_params.enabled = enabled
-            self.track_property_changed.emit(track)
+            self.track_property_changed.emit(track, TRACK_PROPERTY_CHANGE_EFFECTS)
     
     def on_filter_type_changed(self, index: int):
         """滤波器类型改变"""
@@ -1227,7 +1519,7 @@ class PropertyPanelWidget(QWidget):
                 2: FilterType.BANDPASS,
             }
             track.filter_params.filter_type = filter_type_map.get(index, FilterType.LOWPASS)
-            self.track_property_changed.emit(track)
+            self.track_property_changed.emit(track, TRACK_PROPERTY_CHANGE_EFFECTS)
     
     def on_filter_params_changed(self):
         """滤波器参数改变"""
@@ -1235,14 +1527,14 @@ class PropertyPanelWidget(QWidget):
         if track and track.filter_params:
             track.filter_params.cutoff_frequency = self.cutoff_spinbox.value()
             track.filter_params.resonance = self.resonance_spinbox.value()
-            self.track_property_changed.emit(track)
+            self.track_property_changed.emit(track, TRACK_PROPERTY_CHANGE_EFFECTS)
     
     def on_delay_enabled_changed(self, enabled: bool):
         """延迟启用状态改变"""
         track = self.current_track_for_edit if self.current_track_for_edit else self.current_track
         if track and track.delay_params:
             track.delay_params.enabled = enabled
-            self.track_property_changed.emit(track)
+            self.track_property_changed.emit(track, TRACK_PROPERTY_CHANGE_EFFECTS)
     
     def on_delay_params_changed(self):
         """延迟参数改变"""
@@ -1251,14 +1543,14 @@ class PropertyPanelWidget(QWidget):
             track.delay_params.delay_time = self.delay_time_spinbox.value()
             track.delay_params.feedback = self.feedback_spinbox.value()
             track.delay_params.mix = self.mix_spinbox.value()
-            self.track_property_changed.emit(track)
+            self.track_property_changed.emit(track, TRACK_PROPERTY_CHANGE_EFFECTS)
     
     def on_tremolo_enabled_changed(self, enabled: bool):
         """颤音启用状态改变"""
         track = self.current_track_for_edit if self.current_track_for_edit else self.current_track
         if track and track.tremolo_params:
             track.tremolo_params.enabled = enabled
-            self.track_property_changed.emit(track)
+            self.track_property_changed.emit(track, TRACK_PROPERTY_CHANGE_EFFECTS)
     
     def on_batch_waveform_changed(self, index: int):
         """批量波形改变（立即生效）"""
@@ -1304,21 +1596,65 @@ class PropertyPanelWidget(QWidget):
         """音轨类型改变"""
         if not self.current_track_for_edit:
             return
-        
-        # 音轨类型改变时，更新音轨的track_type
-        from core.models import TrackType
-        type_map = {
-            0: TrackType.NOTE_TRACK,  # 主旋律
-            1: TrackType.NOTE_TRACK,  # 低音
-            2: TrackType.DRUM_TRACK   # 打击乐
-        }
-        new_track_type = type_map.get(index, TrackType.NOTE_TRACK)
-        
-        # 更新音轨类型
+
+        new_track_type = resolve_track_type_from_editor_index(index)
+        if self.current_track_for_edit.track_type == new_track_type:
+            return
+
+        if not can_change_track_type_on_existing_track(
+            self.current_track_for_edit,
+            new_track_type,
+        ):
+            self.track_type_combo.blockSignals(True)
+            self.track_type_combo.setCurrentIndex(
+                get_track_type_editor_index(self.current_track_for_edit)
+            )
+            self.track_type_combo.blockSignals(False)
+            QMessageBox.information(
+                self,
+                "暂不支持直接转换",
+                "当前音轨已经包含音符或鼓点数据。\n\n"
+                "“音符音轨”和“打击乐音轨”是两种不同的数据结构，不是简单的音色切换。"
+                "请先新建目标类型音轨并迁移内容，或清空当前音轨后再切换。",
+            )
+            return
+
         self.current_track_for_edit.track_type = new_track_type
-        
-        # 发送音轨属性改变信号（这会触发UI刷新）
-        self.track_property_changed.emit(self.current_track_for_edit)
+        if new_track_type == TrackType.DRUM_TRACK:
+            self.current_track_for_edit.role = None
+        else:
+            self.current_track_for_edit.role = infer_track_role(
+                self.current_track_for_edit.name,
+                new_track_type,
+            )
+        self.track_role_combo.blockSignals(True)
+        self.track_role_combo.setCurrentIndex(
+            get_track_role_editor_index(self.current_track_for_edit)
+        )
+        self.track_role_combo.blockSignals(False)
+        self._refresh_track_role_editor(self.current_track_for_edit)
+
+        self.track_property_changed.emit(
+            self.current_track_for_edit,
+            TRACK_PROPERTY_CHANGE_STRUCTURE,
+        )
+
+    def on_track_role_changed(self, index: int):
+        """音轨角色改变。"""
+        if not self.current_track_for_edit:
+            return
+        if self.current_track_for_edit.track_type != TrackType.NOTE_TRACK:
+            return
+
+        new_track_role = resolve_track_role_from_editor_index(index)
+        if self.current_track_for_edit.role == new_track_role:
+            return
+
+        self.current_track_for_edit.role = new_track_role
+        self.track_property_changed.emit(
+            self.current_track_for_edit,
+            TRACK_PROPERTY_CHANGE_PRESENTATION,
+        )
     
     def on_track_name_changed(self):
         """音轨名称改变"""
@@ -1329,7 +1665,10 @@ class PropertyPanelWidget(QWidget):
         if new_name:
             self.current_track_for_edit.name = new_name
             # 发送音轨属性改变信号
-            self.track_property_changed.emit(self.current_track_for_edit)
+            self.track_property_changed.emit(
+                self.current_track_for_edit,
+                TRACK_PROPERTY_CHANGE_METADATA,
+            )
     
     # 音轨不再有默认波形，波形是音符的属性
     # on_track_waveform_changed 方法已移除
@@ -1340,7 +1679,7 @@ class PropertyPanelWidget(QWidget):
         if track and track.tremolo_params:
             track.tremolo_params.rate = self.tremolo_rate_spinbox.value()
             track.tremolo_params.depth = self.tremolo_depth_spinbox.value()
-            self.track_property_changed.emit(track)
+            self.track_property_changed.emit(track, TRACK_PROPERTY_CHANGE_EFFECTS)
     
     def on_note_vibrato_enabled_changed(self, enabled: bool):
         """单个音符颤音启用状态改变"""

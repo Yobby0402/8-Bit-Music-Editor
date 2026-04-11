@@ -1,5 +1,6 @@
 from core.models import TrackType
-from core.seed_music_generator import SeedMusicStyle, generate_simple_project_from_seed
+from core.seed_music_generator import generate_simple_project_from_seed
+from core.seed_style_catalog import SeedMusicStyle
 
 
 def test_seed_generation_is_deterministic_for_same_inputs():
@@ -31,4 +32,3 @@ def test_seed_generation_can_disable_optional_tracks():
         "Seed 低音",
     ]
     assert all(track.track_type == TrackType.NOTE_TRACK for track in project.tracks)
-

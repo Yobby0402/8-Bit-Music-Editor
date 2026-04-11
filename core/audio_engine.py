@@ -12,14 +12,15 @@ import pygame
 from .effect_processor import EffectProcessor
 from .envelope_processor import EnvelopeProcessor
 from .models import ADSRParams, Note, Project, Track, TrackType
+from .tempo_map import beat_span_to_seconds, has_variable_tempo
 from .track_events import DrumType
 from .waveform_generator import WaveformGenerator
 
 
 class AudioEngine:
     """音频引擎"""
-    
-    def __init__(self, sample_rate: int = 44100):
+
+    def __init__(self, sample_rate: int = 44100, *, initialize_mixer: bool = True):
         """
         初始化音频引擎
         
@@ -31,16 +32,19 @@ class AudioEngine:
         self.envelope_processor = EnvelopeProcessor(sample_rate)
         self.effect_processor = EffectProcessor(sample_rate)
         
-        # 初始化pygame mixer
-        # 设置足够的Channel数量以支持多音轨同时播放（最多32个音轨）
-        pygame.mixer.init(
-            frequency=sample_rate,
-            size=-16,  # 16位
-            channels=2,  # 立体声
-            buffer=512
-        )
-        # 预分配足够的Channel（pygame默认只有8个，我们需要更多）
-        pygame.mixer.set_num_channels(32)
+        self._mixer_initialized = initialize_mixer
+
+        if initialize_mixer:
+            # 初始化pygame mixer
+            # 设置足够的Channel数量以支持多音轨同时播放（最多32个音轨）
+            pygame.mixer.init(
+                frequency=sample_rate,
+                size=-16,  # 16位
+                channels=2,  # 立体声
+                buffer=512
+            )
+            # 预分配足够的Channel（pygame默认只有8个，我们需要更多）
+            pygame.mixer.set_num_channels(32)
         
         self._current_sounds: List[pygame.mixer.Sound] = []
         self._current_channels: List[pygame.mixer.Channel] = []  # 用于实时音量控制
@@ -48,6 +52,12 @@ class AudioEngine:
         self._next_channel_index: int = 0  # 下一个可用的Channel索引
         self.master_volume: float = 1.0  # 主音量（0.0-1.0）
     
+    def _uses_project_tempo_map(self, project: Optional[Project]) -> bool:
+        """Return whether playback should follow the project's tempo map directly."""
+        if project is None:
+            return False
+        return has_variable_tempo(project.bpm_segments)
+
     def generate_note_audio(
         self,
         note: Note,
@@ -97,7 +107,8 @@ class AudioEngine:
         start_time: float = 0.0,
         end_time: Optional[float] = None,
         bpm: Optional[float] = None,
-        original_bpm: Optional[float] = None
+        original_bpm: Optional[float] = None,
+        project: Optional[Project] = None
     ) -> np.ndarray:
         """
         生成轨道的音频
@@ -114,6 +125,9 @@ class AudioEngine:
         """
         if not track.enabled:
             return np.array([], dtype=np.float32)
+
+        if self._uses_project_tempo_map(project):
+            original_bpm = bpm
         
         # 计算BPM比例（如果提供了BPM和原始BPM）
         # 只有当 original_bpm 和 current_bpm 不同时才缩放
@@ -126,7 +140,15 @@ class AudioEngine:
         
         # 根据音轨类型选择不同的生成方法
         if track.track_type == TrackType.DRUM_TRACK:
-            return self._generate_drum_track_audio(track, start_time, end_time, bpm, original_bpm, bpm_ratio)
+            return self._generate_drum_track_audio(
+                track,
+                start_time,
+                end_time,
+                bpm,
+                original_bpm,
+                bpm_ratio,
+                project,
+            )
         else:
             return self._generate_note_track_audio(track, start_time, end_time, bpm, original_bpm, bpm_ratio)
     
@@ -297,7 +319,7 @@ class AudioEngine:
         
         return audio
     
-    def _generate_drum_track_audio(
+    def _legacy_generate_drum_track_audio(
         self,
         track: Track,
         start_time: float,
@@ -378,7 +400,104 @@ class AudioEngine:
         
         return audio
     
-    def mix_tracks(
+    def _generate_drum_track_audio(
+        self,
+        track: Track,
+        start_time: float,
+        end_time: Optional[float],
+        bpm: Optional[float],
+        original_bpm: Optional[float],
+        bpm_ratio: float,
+        project: Optional[Project] = None,
+    ) -> np.ndarray:
+        """Render drum tracks with either the tempo map or legacy single-BPM scaling."""
+        if not track.drum_events:
+            return np.array([], dtype=np.float32)
+
+        use_tempo_map = self._uses_project_tempo_map(project)
+
+        if use_tempo_map and project is not None:
+            if end_time is None:
+                max_end_beat = max(event.end_beat for event in track.drum_events)
+                end_time = project.beats_to_seconds(max_end_beat)
+
+            render_start_time = start_time
+            render_end_time = end_time
+        else:
+            reference_bpm = original_bpm if original_bpm is not None else bpm
+            if reference_bpm is None or reference_bpm <= 0:
+                reference_bpm = 120.0
+
+            if end_time is None:
+                max_end_beat = max(event.end_beat for event in track.drum_events)
+                end_time = max_end_beat * 60.0 / reference_bpm
+
+            render_start_time = start_time * bpm_ratio
+            render_end_time = end_time * bpm_ratio
+
+        duration = render_end_time - render_start_time
+        if duration <= 0:
+            return np.array([], dtype=np.float32)
+
+        num_samples = int(self.sample_rate * duration)
+        audio = np.zeros(num_samples, dtype=np.float32)
+
+        for event in track.drum_events:
+            if use_tempo_map and project is not None:
+                event_start_time = project.beats_to_seconds(event.start_beat)
+                event_duration = beat_span_to_seconds(
+                    event.start_beat,
+                    event.end_beat,
+                    project.bpm_segments,
+                    project.bpm,
+                )
+            else:
+                reference_bpm = original_bpm if original_bpm is not None else bpm
+                if reference_bpm is None or reference_bpm <= 0:
+                    reference_bpm = 120.0
+
+                event_start_time = event.start_beat * 60.0 / reference_bpm
+                event_duration = event.duration_beats * 60.0 / reference_bpm
+                event_start_time *= bpm_ratio
+                event_duration *= bpm_ratio
+
+            event_end_time = event_start_time + event_duration
+            if event_end_time <= render_start_time or event_start_time >= render_end_time:
+                continue
+
+            drum_audio = self.generate_drum_audio(
+                event.drum_type,
+                event_duration,
+                event.velocity,
+                track.volume,
+            )
+
+            event_start_sample = int((event_start_time - render_start_time) * self.sample_rate)
+            event_end_sample = event_start_sample + len(drum_audio)
+
+            if event_start_sample < 0:
+                drum_audio = drum_audio[-event_start_sample:]
+                event_start_sample = 0
+
+            if event_end_sample > num_samples:
+                drum_audio = drum_audio[: num_samples - event_start_sample]
+                event_end_sample = num_samples
+
+            if event_start_sample < num_samples and event_end_sample > 0:
+                audio[event_start_sample:event_end_sample] += drum_audio
+
+        if len(audio) > 0:
+            audio = self.effect_processor.apply_effect_chain(
+                audio,
+                filter_params=track.filter_params,
+                delay_params=track.delay_params,
+                tremolo_params=track.tremolo_params,
+                vibrato_params=track.vibrato_params,
+            )
+
+        return audio
+
+    def _legacy_mix_tracks(
         self,
         tracks: List[Track],
         start_time: float = 0.0,
@@ -447,12 +566,84 @@ class AudioEngine:
         
         return mixed_audio.astype(np.float32)
     
+    def mix_tracks(
+        self,
+        tracks: List[Track],
+        start_time: float = 0.0,
+        end_time: Optional[float] = None,
+        bpm: Optional[float] = None,
+        original_bpm: Optional[float] = None,
+        playback_volume_ratios: Optional[dict] = None,
+        project: Optional[Project] = None,
+    ) -> np.ndarray:
+        """Mix tracks after rendering each one with the correct timing model."""
+        if not tracks:
+            return np.array([], dtype=np.float32)
+
+        rendered_tracks: list[np.ndarray] = []
+        max_samples = 0
+
+        for track in tracks:
+            track_id = id(track)
+            if playback_volume_ratios and track_id in playback_volume_ratios:
+                playback_volume = track.volume * playback_volume_ratios[track_id]
+            else:
+                playback_volume = track.volume
+
+            track_audio = self.generate_track_audio(
+                track,
+                start_time,
+                end_time,
+                bpm,
+                original_bpm,
+                project=project,
+            )
+
+            if playback_volume != track.volume:
+                volume_ratio = playback_volume / track.volume if track.volume > 0 else 0
+                track_audio = track_audio * volume_ratio
+
+            rendered_tracks.append(track_audio)
+            max_samples = max(max_samples, len(track_audio))
+
+        if max_samples <= 0:
+            return np.array([], dtype=np.float32)
+
+        mixed_audio = np.zeros(max_samples, dtype=np.float32)
+        for track_audio in rendered_tracks:
+            mixed_audio[: len(track_audio)] += track_audio
+
+        max_amplitude = np.max(np.abs(mixed_audio))
+        if max_amplitude > 1.0:
+            mixed_audio = mixed_audio / max_amplitude
+
+        return mixed_audio.astype(np.float32)
+
+    def _resolve_enabled_tracks(
+        self,
+        project: Project,
+        playback_enabled_tracks: Optional[dict] = None,
+    ) -> List[Track]:
+        """Resolve the tracks that should be rendered for the current request."""
+        playback_enabled = playback_enabled_tracks
+        if playback_enabled is None:
+            playback_enabled = getattr(project, "_playback_enabled_tracks", None)
+
+        if playback_enabled:
+            return [
+                track for track in project.tracks
+                if playback_enabled.get(id(track), track.enabled)
+            ]
+
+        return [track for track in project.tracks if track.enabled]
+
     def generate_project_audio(
         self,
         project: Project,
         start_time: float = 0.0,
         end_time: Optional[float] = None,
-        playback_volume_ratios: Optional[dict] = None
+        playback_volume_ratios: Optional[dict] = None,
+        playback_enabled_tracks: Optional[dict] = None,
     ) -> np.ndarray:
         """
         生成整个项目的音频（混合所有音轨）
@@ -466,14 +657,10 @@ class AudioEngine:
         Returns:
             项目音频数据
         """
-        # 根据播放设置面板的勾选状态决定哪些轨道启用
-        # 如果提供了playback_enabled_tracks，使用它；否则使用track.enabled
-        playback_enabled = getattr(project, '_playback_enabled_tracks', None)
-        if playback_enabled:
-            enabled_tracks = [track for track in project.tracks 
-                            if playback_enabled.get(id(track), track.enabled)]
-        else:
-            enabled_tracks = [track for track in project.tracks if track.enabled]
+        enabled_tracks = self._resolve_enabled_tracks(
+            project,
+            playback_enabled_tracks=playback_enabled_tracks,
+        )
         
         # MIDI导入时，时间已经基于正确的BPM计算，直接使用原始时间，不进行缩放
         # 只有当用户手动修改BPM时才需要缩放
@@ -490,14 +677,22 @@ class AudioEngine:
             if abs(project_original_bpm - project_bpm) < 0.01:
                 project_original_bpm = None  # 设置为 None 表示不缩放
         
-        return self.mix_tracks(enabled_tracks, start_time, end_time, bpm=project_bpm, original_bpm=project_original_bpm,
-                              playback_volume_ratios=playback_volume_ratios)
+        return self.mix_tracks(
+            enabled_tracks,
+            start_time,
+            end_time,
+            bpm=project_bpm,
+            original_bpm=project_original_bpm,
+            playback_volume_ratios=playback_volume_ratios,
+            project=project,
+        )
     
     def generate_track_audio_list(
         self,
         project: Project,
         start_time: float = 0.0,
-        end_time: Optional[float] = None
+        end_time: Optional[float] = None,
+        playback_enabled_tracks: Optional[dict] = None,
     ) -> List[tuple]:
         """
         为每个音轨生成单独的音频（用于单独播放）
@@ -510,13 +705,10 @@ class AudioEngine:
         Returns:
             [(track, audio_data, track_id), ...] 列表
         """
-        # 根据播放设置面板的勾选状态决定哪些轨道启用
-        playback_enabled = getattr(project, '_playback_enabled_tracks', None)
-        if playback_enabled:
-            enabled_tracks = [track for track in project.tracks 
-                            if playback_enabled.get(id(track), track.enabled)]
-        else:
-            enabled_tracks = [track for track in project.tracks if track.enabled]
+        enabled_tracks = self._resolve_enabled_tracks(
+            project,
+            playback_enabled_tracks=playback_enabled_tracks,
+        )
         
         project_bpm = getattr(project, "bpm", None)
         project_original_bpm = getattr(project, "original_bpm", None)
@@ -533,10 +725,65 @@ class AudioEngine:
         for track in enabled_tracks:
             track_id = id(track)
             # 为每个音轨生成单独的音频（不应用playback_volume_ratios，通过Channel控制）
-            track_audio = self.generate_track_audio(track, start_time, end_time, project_bpm, project_original_bpm)
+            track_audio = self.generate_track_audio(
+                track,
+                start_time,
+                end_time,
+                project_bpm,
+                project_original_bpm,
+                project=project,
+            )
             track_audio_list.append((track, track_audio, track_id))
         
         return track_audio_list
+
+    def pack_audio_for_playback(self, audio_data: np.ndarray) -> np.ndarray:
+        """Pack mono float audio into a pygame-ready int16 stereo buffer."""
+        if (
+            audio_data.dtype == np.int16
+            and audio_data.ndim == 2
+            and audio_data.shape[1] == 2
+        ):
+            return audio_data
+
+        audio_int16 = (np.clip(audio_data, -1.0, 1.0) * 32767).astype(np.int16)
+        return np.column_stack((audio_int16, audio_int16))
+
+    def _allocate_playback_channel(self):
+        """Allocate a playback channel, falling back to force-find if needed."""
+        try:
+            channel_index = self._next_channel_index
+            channel = pygame.mixer.Channel(channel_index)
+            self._next_channel_index = (self._next_channel_index + 1) % 32
+        except Exception:
+            channel = pygame.mixer.find_channel(force=True)
+            if channel is None:
+                return None
+        return channel
+
+    def _resolve_output_volume(self, volume: Optional[float]) -> float:
+        """Combine per-sound volume with the current master volume."""
+        if volume is None:
+            return self.master_volume
+        return volume * self.master_volume
+
+    def prepare_packed_track_audio(
+        self,
+        packed_audio: np.ndarray,
+        volume: Optional[float] = None,
+        track_id: Optional[int] = None,
+    ) -> tuple:
+        """Create a Sound + Channel pair from an already packed stereo buffer."""
+        sound = pygame.sndarray.make_sound(packed_audio)
+        channel = self._allocate_playback_channel()
+        if channel is None:
+            return (None, None)
+
+        channel.set_volume(self._resolve_output_volume(volume))
+        self._current_channels.append(channel)
+        if track_id is not None:
+            self._track_channels[track_id] = channel
+        return (sound, channel)
     
     def prepare_track_audio(
         self,
@@ -544,54 +791,13 @@ class AudioEngine:
         volume: Optional[float] = None,
         track_id: Optional[int] = None
     ) -> tuple:
-        """
-        准备音轨音频（创建Sound和Channel，但不播放）
-        
-        Args:
-            audio_data: 音频数据数组
-            volume: 音量（0.0-1.0），None则使用主音量
-            track_id: 音轨ID（如果提供，会保存Channel引用以便实时控制）
-        
-        Returns:
-            (sound, channel) 元组，如果失败返回 (None, None)
-        """
-        # 转换为16位整数
-        audio_int16 = (np.clip(audio_data, -1.0, 1.0) * 32767).astype(np.int16)
-        
-        # 转换为立体声（左右声道相同）
-        stereo = np.column_stack((audio_int16, audio_int16))
-        
-        # 创建Sound对象
-        sound = pygame.sndarray.make_sound(stereo)
-        
-        # 使用Channel播放，支持实时音量控制
-        # 为每个音轨分配不同的Channel索引，确保不会冲突
-        try:
-            channel_index = self._next_channel_index
-            channel = pygame.mixer.Channel(channel_index)
-            self._next_channel_index = (self._next_channel_index + 1) % 32  # 循环使用32个Channel
-        except Exception:
-            # 回退到find_channel
-            channel = pygame.mixer.find_channel(force=True)
-            if channel is None:
-                return (None, None)
-        
-        # 设置初始音量
-        # 注意：track.volume已经在音频生成时应用了，所以这里只需要应用volume_ratio和master_volume
-        if volume is None:
-            final_volume = self.master_volume
-        else:
-            # volume已经是volume_ratio了（不包含track.volume）
-            final_volume = volume * self.master_volume  # 结合主音量
-        
-        channel.set_volume(final_volume)
-        
-        # 保存Channel引用
-        self._current_channels.append(channel)
-        if track_id is not None:
-            self._track_channels[track_id] = channel
-        
-        return (sound, channel)
+        """Prepare track audio for later playback."""
+        packed_audio = self.pack_audio_for_playback(audio_data)
+        return self.prepare_packed_track_audio(
+            packed_audio,
+            volume=volume,
+            track_id=track_id,
+        )
     
     def play_audio(
         self,
@@ -614,55 +820,26 @@ class AudioEngine:
         Returns:
             pygame Sound对象
         """
-        # 不在这里应用音量，而是通过Channel实时控制
-        # 转换为16位整数
-        audio_int16 = (np.clip(audio_data, -1.0, 1.0) * 32767).astype(np.int16)
-        
-        # 转换为立体声（左右声道相同）
-        stereo = np.column_stack((audio_int16, audio_int16))
-        
-        # 创建Sound对象
-        sound = pygame.sndarray.make_sound(stereo)
+        packed_audio = self.pack_audio_for_playback(audio_data)
+        sound = pygame.sndarray.make_sound(packed_audio)
         
         if use_channel:
-            # 使用Channel播放，支持实时音量控制
-            # 为每个音轨分配不同的Channel索引
-            try:
-                channel_index = self._next_channel_index
-                channel = pygame.mixer.Channel(channel_index)
-                self._next_channel_index = (self._next_channel_index + 1) % 32
-            except Exception:
-                # 回退到find_channel
-                channel = pygame.mixer.find_channel(force=True)
-                if channel is None:
-                    # 如果还是失败，回退到直接播放
-                    use_channel = False
-            
-            # 设置初始音量
-            if volume is None:
-                volume = self.master_volume
+            channel = self._allocate_playback_channel()
+            if channel is None:
+                use_channel = False
             else:
-                volume = volume * self.master_volume  # 结合主音量
-            
-            channel.set_volume(volume)
-            channel.play(sound, loops=-1 if loop else 0)
-            
-            self._current_channels.append(channel)
-            
-            # 如果提供了track_id，保存Channel引用以便实时控制
-            if track_id is not None:
-                self._track_channels[track_id] = channel
-        else:
+                channel.set_volume(self._resolve_output_volume(volume))
+                channel.play(sound, loops=-1 if loop else 0)
+
+                self._current_channels.append(channel)
+
+                # 如果提供了track_id，保存Channel引用以便实时控制
+                if track_id is not None:
+                    self._track_channels[track_id] = channel
+        if not use_channel:
             # 直接播放（旧方式）
-            if volume is None:
-                volume = self.master_volume
-            else:
-                volume = volume * self.master_volume
-            
-            audio_data = audio_data * volume
-            audio_int16 = (np.clip(audio_data, -1.0, 1.0) * 32767).astype(np.int16)
-            stereo = np.column_stack((audio_int16, audio_int16))
-            sound = pygame.sndarray.make_sound(stereo)
+            audio_data = audio_data * self._resolve_output_volume(volume)
+            sound = pygame.sndarray.make_sound(self.pack_audio_for_playback(audio_data))
             sound.play(loops=-1 if loop else 0)
         
         self._current_sounds.append(sound)
@@ -867,4 +1044,5 @@ class AudioEngine:
     def cleanup(self) -> None:
         """清理资源"""
         self.stop_all()
-        pygame.mixer.quit()
+        if self._mixer_initialized:
+            pygame.mixer.quit()

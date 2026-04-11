@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSplitter,
     QSizePolicy,
     QSlider,
     QSpinBox,
@@ -54,6 +55,23 @@ def resolve_locked_dock_width(current_width: int, minimum_width: int) -> int:
     return current_width if current_width > 0 else minimum_width
 
 
+def calculate_default_center_splitter_sizes(total_height: int) -> tuple[int, int]:
+    """Return default sizes for the editor/track vertical splitter."""
+    safe_total_height = max(400, int(total_height))
+    editor_height = max(180, int(safe_total_height * 0.35))
+    track_height = max(220, safe_total_height - editor_height)
+    return editor_height, track_height
+
+
+def configure_splitter_pane(widget: QWidget, *, vertical_policy) -> QWidget:
+    """Make a splitter pane shrinkable enough for manual resizing."""
+    widget.setMinimumHeight(0)
+    policy = widget.sizePolicy()
+    policy.setVerticalPolicy(vertical_policy)
+    widget.setSizePolicy(policy)
+    return widget
+
+
 class MainWindowShellOpsMixin:
     """承载 MainWindow 的窗口壳层、布局与菜单逻辑。"""
 
@@ -63,10 +81,17 @@ class MainWindowShellOpsMixin:
         note_selection_layout = QHBoxLayout()
         note_selection_layout.setContentsMargins(0, 0, 0, 0)
         note_selection_area.setLayout(note_selection_layout)
-        note_selection_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        configure_splitter_pane(
+            note_selection_area,
+            vertical_policy=QSizePolicy.Ignored,
+        )
 
         self.unified_editor = UnifiedEditorWidget(self.sequencer.get_bpm())
         self.unified_editor.audio_engine = self.sequencer.audio_engine
+        configure_splitter_pane(
+            self.unified_editor,
+            vertical_policy=QSizePolicy.Ignored,
+        )
         if hasattr(self.unified_editor, "piano_keyboard"):
             self.unified_editor.piano_keyboard.audio_engine = self.sequencer.audio_engine
         note_selection_layout.addWidget(self.unified_editor)
@@ -166,19 +191,34 @@ class MainWindowShellOpsMixin:
         track_area_layout = QVBoxLayout()
         track_area_layout.setContentsMargins(0, 0, 0, 0)
         track_area.setLayout(track_area_layout)
-        track_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        configure_splitter_pane(
+            track_area,
+            vertical_policy=QSizePolicy.Expanding,
+        )
 
         playback_control_area = self._build_playback_control_area()
         track_area_layout.addWidget(playback_control_area)
 
         self.view_stack = QStackedWidget()
+        configure_splitter_pane(
+            self.view_stack,
+            vertical_policy=QSizePolicy.Expanding,
+        )
 
         self.sequence_widget = GridSequenceWidget(self.sequencer.get_bpm())
+        configure_splitter_pane(
+            self.sequence_widget,
+            vertical_policy=QSizePolicy.Ignored,
+        )
         self.view_stack.addWidget(self.sequence_widget)
 
         self.oscilloscope_widget = OscilloscopeWidget(
             self.sequencer.audio_engine,
             self.sequencer.get_bpm(),
+        )
+        configure_splitter_pane(
+            self.oscilloscope_widget,
+            vertical_policy=QSizePolicy.Ignored,
         )
         self.view_stack.addWidget(self.oscilloscope_widget)
         self.view_stack.setCurrentIndex(0)
@@ -274,7 +314,7 @@ class MainWindowShellOpsMixin:
             minimum_width=self.property_dock.minimumWidth(),
             visible=False,
         )
-        self.bpm_editor_panel.bpm_segments_changed.connect(self.on_bpm_segments_changed)
+        self.bpm_editor_panel.tempo_events_changed.connect(self.on_tempo_events_changed)
 
         self.tabifyDockWidget(self.property_dock, self.score_dock)
         self.tabifyDockWidget(self.property_dock, self.style_dock)
@@ -311,10 +351,19 @@ class MainWindowShellOpsMixin:
         central_widget.setLayout(main_layout)
 
         note_selection_area = self._build_editor_area()
-        main_layout.addWidget(note_selection_area, 1)
-
         track_area, playback_control_area = self._build_track_area()
-        main_layout.addWidget(track_area, 1)
+
+        self.center_splitter = QSplitter(Qt.Vertical)
+        self.center_splitter.setChildrenCollapsible(False)
+        self.center_splitter.addWidget(note_selection_area)
+        self.center_splitter.addWidget(track_area)
+        editor_height, track_height = calculate_default_center_splitter_sizes(
+            geometry[3],
+        )
+        self.center_splitter.setSizes([editor_height, track_height])
+        self.center_splitter.setStretchFactor(0, 0)
+        self.center_splitter.setStretchFactor(1, 1)
+        main_layout.addWidget(self.center_splitter, 1)
 
         self._build_side_docks()
         self.connect_signals()
@@ -455,6 +504,14 @@ class MainWindowShellOpsMixin:
 
     def closeEvent(self, event):
         """窗口关闭事件。"""
+        if (
+            getattr(self, "_midi_import_thread", None) is not None
+            or getattr(self, "_playback_prepare_thread", None) is not None
+        ):
+            self.statusBar().showMessage("后台任务仍在运行，请稍后再关闭")
+            event.ignore()
+            return
+
         if self.check_unsaved_changes():
             self.sequencer.cleanup()
             event.accept()

@@ -21,6 +21,7 @@ class ProgressBarWidget(QWidget):
         super().__init__(parent)
         
         self.bpm = 120.0
+        self.project = None
         self.current_time = 0.0
         self.total_time = 0.0  # 总时长（秒）
         self.is_dragging = False
@@ -86,6 +87,23 @@ class ProgressBarWidget(QWidget):
         secs = int(seconds % 60)
         return f"{minutes:02d}:{secs:02d}"
     
+    def set_project(self, project):
+        """Set the project used for beat/second conversion."""
+        self.project = project
+
+    def _safe_bpm(self) -> float:
+        return self.bpm if self.bpm > 0 else 120.0
+
+    def _seconds_to_beats(self, seconds: float) -> float:
+        if self.project is not None:
+            return self.project.seconds_to_beats(seconds)
+        return max(0.0, seconds) * self._safe_bpm() / 60.0
+
+    def _beats_to_seconds(self, beats: float) -> float:
+        if self.project is not None:
+            return self.project.beats_to_seconds(beats)
+        return max(0.0, beats) * 60.0 / self._safe_bpm()
+
     def on_slider_pressed(self):
         """滑块按下"""
         self.is_dragging = True
@@ -101,11 +119,10 @@ class ProgressBarWidget(QWidget):
             settings_manager = get_settings_manager()
             if settings_manager.is_snap_to_beat_enabled():
                 # 吸附到最近的1/4拍
-                beats_per_second = self.bpm / 60.0
-                beat_position = new_time * beats_per_second
+                beat_position = self._seconds_to_beats(new_time)
                 beat_subdivision = 4
                 snapped_beat = round(beat_position * beat_subdivision) / beat_subdivision
-                new_time = snapped_beat / beats_per_second
+                new_time = self._beats_to_seconds(snapped_beat)
                 # 更新滑块位置以反映吸附
                 new_value = int((new_time / self.total_time) * 1000)
                 self.progress_slider.blockSignals(True)

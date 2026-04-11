@@ -5,6 +5,7 @@
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from .models import ADSRParams, Note, Track
@@ -27,6 +28,15 @@ class Command(ABC):
     def get_description(self) -> str:
         """获取命令描述（用于显示）"""
         pass
+
+
+@dataclass(frozen=True)
+class CommandHistoryResult:
+    """Structured undo/redo result for UI refresh decisions."""
+
+    command: "Command"
+    description: str
+    operation: str
 
 
 class CommandHistory:
@@ -74,12 +84,12 @@ class CommandHistory:
         """是否可以重做"""
         return self.current_index < len(self.history) - 1
     
-    def undo(self) -> Optional[str]:
+    def undo(self) -> Optional[CommandHistoryResult]:
         """
         撤销上一个命令
         
         Returns:
-            命令描述，如果无法撤销则返回None
+            命令结果，如果无法撤销则返回None
         """
         if not self.can_undo():
             return None
@@ -88,14 +98,18 @@ class CommandHistory:
         command.undo()
         self.current_index -= 1
         
-        return command.get_description()
+        return CommandHistoryResult(
+            command=command,
+            description=command.get_description(),
+            operation="undo",
+        )
     
-    def redo(self) -> Optional[str]:
+    def redo(self) -> Optional[CommandHistoryResult]:
         """
         重做下一个命令
         
         Returns:
-            命令描述，如果无法重做则返回None
+            命令结果，如果无法重做则返回None
         """
         if not self.can_redo():
             return None
@@ -104,7 +118,11 @@ class CommandHistory:
         command = self.history[self.current_index]
         command.execute()
         
-        return command.get_description()
+        return CommandHistoryResult(
+            command=command,
+            description=command.get_description(),
+            operation="redo",
+        )
     
     def clear(self) -> None:
         """清空历史"""
@@ -179,6 +197,8 @@ class DeleteNoteCommand(Command):
             pitch=note.pitch,
             start_time=note.start_time,
             duration=note.duration,
+            start_tick=note.start_tick,
+            duration_ticks=note.duration_ticks,
             velocity=note.velocity,
             waveform=note.waveform,
             duty_cycle=note.duty_cycle,
@@ -254,7 +274,9 @@ class ModifyNoteCommand(Command):
                     self.note.adsr = value
             else:
                 setattr(self.note, key, value)
-        
+
+        if 'start_time' in self.new_values or 'duration' in self.new_values:
+            self.note.sync_tick_timing(self.sequencer.project, prefer_existing=False)
         # 如果修改了start_time或duration，需要重新排序
         if 'start_time' in self.new_values or 'duration' in self.new_values:
             self.track.notes.sort(key=lambda n: n.start_time)
@@ -274,7 +296,9 @@ class ModifyNoteCommand(Command):
                     self.note.adsr = value
             else:
                 setattr(self.note, key, value)
-        
+
+        if 'start_time' in self.old_values or 'duration' in self.old_values:
+            self.note.sync_tick_timing(self.sequencer.project, prefer_existing=False)
         # 如果修改了start_time或duration，需要重新排序
         if 'start_time' in self.old_values or 'duration' in self.old_values:
             self.track.notes.sort(key=lambda n: n.start_time)
@@ -320,11 +344,13 @@ class MoveNoteCommand(Command):
     def execute(self) -> None:
         """执行：移动到新位置"""
         self.note.start_time = self.new_start_time
+        self.note.sync_tick_timing(self.sequencer.project, prefer_existing=False)
         self.track.notes.sort(key=lambda n: n.start_time)
     
     def undo(self) -> None:
         """撤销：恢复到旧位置"""
         self.note.start_time = self.old_start_time
+        self.note.sync_tick_timing(self.sequencer.project, prefer_existing=False)
         self.track.notes.sort(key=lambda n: n.start_time)
     
     def get_description(self) -> str:
