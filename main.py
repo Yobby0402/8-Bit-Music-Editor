@@ -60,6 +60,11 @@ def main():
 
     app = QApplication(sys.argv)
 
+    # 可选：EIGHTBIT_DEBUG_THREADS=1 时打印 Qt 警告与线程日志（排查 QThread / LM Studio）
+    from ui.qt_thread_debug import install_qt_message_handler
+
+    install_qt_message_handler()
+
     # 设置自适应字体大小（根据DPI）
     # 获取屏幕DPI缩放比例
     screen = app.primaryScreen()

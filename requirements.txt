@@ -17,3 +17,6 @@ soundfile>=0.10.0
 
 # MIDI处理（可选）
 mido>=1.2.0
+
+# 本地 LLM（LM Studio OpenAI 兼容 API）
+httpx>=0.27.0

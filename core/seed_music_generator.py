@@ -4,7 +4,7 @@
 鐩爣锛氱被浼?Minecraft 鐨勪笘鐣岀敓鎴愶紝鐢ㄤ竴涓?seed 鐢熸垚涓€娈电畝鍗曚絾鍙紪杈戠殑闊充箰銆?褰撳墠瀹炵幇锛氭渶灏忓彲鐢ㄧ増鏈紝鍙敓鎴愪竴涓富鏃嬪緥杞ㄩ亾锛岀敤浜庨獙璇佹祦绋嬪拰鍙噸澶嶆€с€?
 閲嶆瀯鐗堟湰锛氫娇鐢ㄩ鏍奸厤缃被绯荤粺锛屾瘡涓鏍肩嫭绔嬬鐞嗗叾鐢熸垚閫昏緫銆?"""
 
-from typing import Union
+from typing import Optional, Union
 
 from . import seed_generation_planner as generation_planner
 from . import seed_generation_utils as generation_utils
@@ -14,6 +14,14 @@ from . import seed_style_configs as style_configs
 from . import seed_track_builders as track_builders
 from .models import Note, Project, Track, TrackType
 from .seed_style_catalog import SeedMusicStyle, get_style_meta, get_style_params
+from .seed_free_form import (
+    bars_progression_free,
+    expand_motifs_with_procedural_fragments,
+    merge_progression_degrees,
+    random_intro_bars,
+    random_phrase_partition,
+)
+from .variation_spec import VariationSpec, build_rng_family, filter_motifs_by_bank
 
 RUNTIME_STYLE_OVERRIDES = style_catalog.RUNTIME_STYLE_OVERRIDES
 STYLE_META = style_catalog.STYLE_META
@@ -57,6 +65,7 @@ def generate_simple_project_from_seed(
     enable_bass: bool = True,
     enable_harmony: bool = True,
     enable_drums: bool = True,
+    variation: Optional[VariationSpec] = None,
 ) -> Project:
     """
     浣跨敤 seed 鐢熸垚涓€涓畝鍗曚絾鏇存湁銆屼箰鍙ユ劅銆嶇殑 8bit 椤圭洰锛堢洰鍓嶏細鍗曚富鏃嬪緥杞級銆?
@@ -67,7 +76,18 @@ def generate_simple_project_from_seed(
     - 寮烘媿 / 灏忚妭寮€澶翠紭鍏堜娇鐢ㄥ拰寮﹀唴闊筹紝寮辨媿浣跨敤缁忚繃闊虫垨閭婚煶銆?
     - 绠€鍗曠殑鍙ュ紡杞粨锛氬墠涓ゅ彞鐩镐技锛屽悗涓ゅ彞鍋氬皬鍙樺寲鎴栨媺楂樼粨灏俱€?
     """
-    rng = get_rng_from_seed(seed)
+    family = build_rng_family(seed, style.value, variation)
+    structure_rng = family.structure
+    melody_rng = family.melody
+    bass_rng = family.bass
+    harmony_rng = family.harmony
+    drum_rng = family.drums
+    drum_density = 5
+    if variation is not None and variation.is_active():
+        drum_density = variation.knob(1, 5)
+
+    free_form = bool(variation and variation.free_form_layout)
+
     style_params = get_style_params(style)
     
     # 鑾峰彇椋庢牸閰嶇疆绫?
@@ -75,7 +95,12 @@ def generate_simple_project_from_seed(
 
     # ---- 鍏ㄥ眬鍙傛暟锛堥殢椋庢牸鐣ユ湁鍙樺寲锛?---
     # 浣跨敤 STYLE_META 涓殑榛樿 BPM锛屼繚璇?UI 灞曠ず涓庣敓鎴愰€昏緫瀹屽叏涓€鑷?
-    bpm = get_style_meta(style)["default_bpm"]
+    meta_bpm = get_style_meta(style)["default_bpm"]
+    if free_form:
+        bpm = int(round(meta_bpm * (0.88 + structure_rng.random() * 0.24)))
+        bpm = max(50, min(220, bpm))
+    else:
+        bpm = meta_bpm
     beats_per_bar = 4.0  # 4/4 鎷?
     # 闀垮害闄愬埗锛氭渶灏?灏忚妭锛堣嚦灏戦棶-绛旂粨鏋勶級锛屾渶澶?28灏忚妭锛堝畬鏁存洸瀛愶級
     length_bars = max(8, min(length_bars, 128))
@@ -85,13 +110,19 @@ def generate_simple_project_from_seed(
     project = Project(name=f"Seed Music ({seed})", bpm=bpm)
 
     # ---- 缁撴瀯灞傦細鏍规嵁棰勮鍐冲畾涔愬彞缁撴瀯 ----
-    structure = get_structure_for_bars(length_bars)
-    # 绋嬪簭鑷姩鍐冲畾 Intro锛氬浜?8 灏忚妭鍙婁互涓婏紝鍓?2 灏忚妭浣滀负 Intro
-    intro_bars = 2 if length_bars >= 8 else 0
-    phrase_plan = build_phrase_plan(length_bars, intro_bars, structure["phrases"])
+    if free_form:
+        intro_bars = random_intro_bars(length_bars, structure_rng)
+        main_bars = length_bars - intro_bars
+        phrase_lengths = random_phrase_partition(main_bars, structure_rng)
+        phrase_plan = build_phrase_plan(length_bars, intro_bars, phrase_lengths)
+    else:
+        structure = get_structure_for_bars(length_bars)
+        # 绋嬪簭鑷姩鍐冲畾 Intro锛氬浜?8 灏忚妭鍙婁互涓婏紝鍓?2 灏忚妭浣滀负 Intro
+        intro_bars = 2 if length_bars >= 8 else 0
+        phrase_plan = build_phrase_plan(length_bars, intro_bars, structure["phrases"])
 
     # ---- 椋庢牸鍙樹綋寮€鍏筹紙涓嶆敼鍙橀粯璁よ涓猴紝鍙湪瀵瑰簲鍙樹綋涓嬪仛杞婚噺璋冩暣锛?---
-    variant_behavior = build_variant_behavior(style, variant_id, rng, length_bars)
+    variant_behavior = build_variant_behavior(style, variant_id, structure_rng, length_bars)
     is_battle_melody = variant_behavior.is_battle_melody
     is_battle_drums = variant_behavior.is_battle_drums
     is_suspense_dense = variant_behavior.is_suspense_dense
@@ -99,18 +130,26 @@ def generate_simple_project_from_seed(
     quiet_bars = variant_behavior.quiet_bars
 
     # ---- 璋冨紡涓庨煶闃讹紙浣跨敤閰嶇疆绫伙級----
-    root_midi, mode_name, scale_offsets = style_config.get_scale_choices(rng)
+    root_midi, mode_name, scale_offsets = style_config.get_scale_choices(structure_rng)
 
     # 搴曞眰鍜屽０锛氱敤鍜屽鸡绾ф暟锛?=I,4=IV,5=V,6=vi,2=ii锛?
     # 浣跨敤閰嶇疆绫昏幏鍙栧拰寮﹁繘琛屾ā鏉?
-    progression_templates = style_config.get_chord_progression_templates(rng)
-    prog = rng.choice(progression_templates)
-    # 鏍规嵁灏忚妭鏁伴噸澶?/ 鎴柇
-    bars_progression = [prog[i % len(prog)] for i in range(length_bars)]
+    progression_templates = style_config.get_chord_progression_templates(structure_rng)
+    if free_form:
+        deg_pool = merge_progression_degrees(progression_templates, structure_rng)
+        bars_progression = bars_progression_free(length_bars, deg_pool, structure_rng)
+    else:
+        prog = structure_rng.choice(progression_templates)
+        # 鏍规嵁灏忚妭鏁伴噸澶?/ 鎴柇
+        bars_progression = [prog[i % len(prog)] for i in range(length_bars)]
 
     # ---- 鍔ㄦ満妯″紡锛氱浉瀵归煶绾?+ 鑺傚 ----
     # 使用配置类获取该风格的动机模式
-    motifs = style_config.get_melody_motifs(rng, variant_id)
+    motifs = style_config.get_melody_motifs(melody_rng, variant_id)
+    if free_form:
+        motifs = expand_motifs_with_procedural_fragments(motifs, melody_rng)
+    elif variation is not None and variation.is_active():
+        motifs = filter_motifs_by_bank(motifs, variation.knob(0, 5))
     melody_track = Track(name="Seed 主旋律", track_type=TrackType.NOTE_TRACK)
     # 浣跨敤椋庢牸閰嶇疆鐨?ADSR锛岃€屼笉鏄湪杩欓噷鍐欐
     melody_adsr = style_params.melody_adsr
@@ -130,7 +169,7 @@ def generate_simple_project_from_seed(
     # 鑸炴洸椋庢牸锛欼ntro閮ㄥ垎绾紦鐐癸紝鍜屽０鍏堣繘鍏ワ紝涓绘棆寰嬬◢鍚庤繘鍏?
     dance_melody_start_bar = 0
     dance_harmony_start_bar = 0
-    if style == SeedMusicStyle.DANCE and intro_bars >= 1:
+    if not free_form and style == SeedMusicStyle.DANCE and intro_bars >= 1:
         # 鑸炴洸椋庢牸锛氬墠1-2灏忚妭绾紦鐐癸紝鍜屽０浠庣2灏忚妭寮€濮嬶紝涓绘棆寰嬩粠绗?灏忚妭寮€濮?
         dance_drum_only_bars = min(2, intro_bars)  # 鏈€澶?灏忚妭绾紦鐐?
         dance_harmony_start_bar = dance_drum_only_bars  # 鍜屽０浠庣2灏忚妭寮€濮嬶紙濡傛灉鏈?灏忚妭Intro锛?
@@ -140,7 +179,7 @@ def generate_simple_project_from_seed(
             dance_harmony_start_bar = 0  # 鍜屽０浠庣1灏忚妭寮€濮?
             dance_melody_start_bar = 1  # 涓绘棆寰嬩粠绗?灏忚妭寮€濮?
     
-    if style == SeedMusicStyle.ROCK and intro_bars >= 2:
+    if not free_form and style == SeedMusicStyle.ROCK and intro_bars >= 2:
         # 鎽囨粴椋庢牸锛氬墠1-2灏忚妭绾紦鐐癸紝涓绘棆寰嬩粠绗?灏忚妭寮€濮嬶紙濡傛灉鏈?灏忚妭Intro锛?
         # 鎴栬€呬粠绗?灏忚妭鍚庡崐娈靛紑濮嬶紙濡傛灉鍙湁1灏忚妭Intro锛?
         rock_drum_only_bars = min(2, intro_bars)  # 鏈€澶?灏忚妭绾紦鐐?
@@ -158,7 +197,7 @@ def generate_simple_project_from_seed(
             bar_root_degree = chord_root_degree(bar_chord_degree)
             
             # Intro閮ㄥ垎锛氫娇鐢ㄧ畝鍗曠殑鍔ㄦ満锛屼笉鍙備笌涔愬彞缁撴瀯
-            motif = rng.choice(motifs)
+            motif = melody_rng.choice(motifs)
             beat_in_bar = 0.0
             for rel_degree, dur_beats in motif:
                 if beat_in_bar >= beats_per_bar - 1e-6:
@@ -171,7 +210,7 @@ def generate_simple_project_from_seed(
                 
                 if is_strong_beat:
                     chord_tones = [0, 2, 4]
-                    base_degree = bar_root_degree + rng.choice(chord_tones)
+                    base_degree = bar_root_degree + melody_rng.choice(chord_tones)
                 else:
                     base_degree = bar_root_degree + rel_degree
                 
@@ -198,7 +237,7 @@ def generate_simple_project_from_seed(
                 )
                 melody_track.notes.append(note)
                 beat_in_bar += dur_beats
-    elif style == SeedMusicStyle.DANCE and intro_bars >= 1:
+    elif not free_form and style == SeedMusicStyle.DANCE and intro_bars >= 1:
         # 鑸炴洸椋庢牸锛氬墠1-2灏忚妭绾紦鐐癸紝涓绘棆寰嬩粠绗?灏忚妭寮€濮?
         # 涓绘棆寰嬪欢杩熻繘鍏ワ細浠巇ance_melody_start_bar寮€濮嬬敓鎴怚ntro鏃嬪緥
         for bar_idx in range(dance_melody_start_bar, intro_bars):
@@ -207,7 +246,7 @@ def generate_simple_project_from_seed(
             bar_root_degree = chord_root_degree(bar_chord_degree)
             
             # Intro閮ㄥ垎锛氫娇鐢ㄧ畝鍗曠殑鍔ㄦ満锛屼笉鍙備笌涔愬彞缁撴瀯
-            motif = rng.choice(motifs)
+            motif = melody_rng.choice(motifs)
             beat_in_bar = 0.0
             for rel_degree, dur_beats in motif:
                 if beat_in_bar >= beats_per_bar - 1e-6:
@@ -220,7 +259,7 @@ def generate_simple_project_from_seed(
                 
                 if is_strong_beat:
                     chord_tones = [0, 2, 4]
-                    base_degree = bar_root_degree + rng.choice(chord_tones)
+                    base_degree = bar_root_degree + melody_rng.choice(chord_tones)
                 else:
                     base_degree = bar_root_degree + rel_degree
                 
@@ -254,7 +293,7 @@ def generate_simple_project_from_seed(
             bar_root_degree = chord_root_degree(bar_chord_degree)
             
             # Intro閮ㄥ垎锛氫娇鐢ㄧ畝鍗曠殑鍔ㄦ満锛屼笉鍙備笌涔愬彞缁撴瀯
-            motif = rng.choice(motifs)
+            motif = melody_rng.choice(motifs)
             beat_in_bar = 0.0
             for rel_degree, dur_beats in motif:
                 if beat_in_bar >= beats_per_bar - 1e-6:
@@ -267,7 +306,7 @@ def generate_simple_project_from_seed(
                 
                 if is_strong_beat:
                     chord_tones = [0, 2, 4]
-                    base_degree = bar_root_degree + rng.choice(chord_tones)
+                    base_degree = bar_root_degree + melody_rng.choice(chord_tones)
                 else:
                     base_degree = bar_root_degree + rel_degree
                 
@@ -313,40 +352,44 @@ def generate_simple_project_from_seed(
         is_phrase_start = (bar_idx == phrase_start_bar)
         
         if is_phrase_start:
-            if phrase_idx == 0:
+            if free_form:
+                phrase_motifs[phrase_idx] = melody_rng.choice(motifs)
+            elif phrase_idx == 0:
                 # 绗竴涓箰鍙ワ細閫夋嫨涓婚鍔ㄦ満
-                theme_motif = rng.choice(motifs)
+                theme_motif = melody_rng.choice(motifs)
                 phrase_motifs[phrase_idx] = theme_motif
             else:
                 # 鍚庣画涔愬彞锛氬熀浜庝富棰樿繘琛屽彉濂?
                 if phrase_role == "answer":
                     # 绛斿彞锛氫娇鐢ㄤ富棰樼殑"闀滃儚"鎴?鍊掑奖"锛堜笂琛屽彉涓嬭锛屼笅琛屽彉涓婅锛?
-                    theme = phrase_motifs.get(0, rng.choice(motifs))
+                    theme = phrase_motifs.get(0, melody_rng.choice(motifs))
                     # 绠€鍗曞彉濂忥細鍙嶈浆鐩稿搴︽暟
                     phrase_motifs[phrase_idx] = [(-rel, dur) for rel, dur in theme]
                 elif phrase_role == "variation":
                     # 鍙樺锛氫娇鐢ㄤ富棰樼殑鑺傚锛屼絾鏀瑰彉闊抽珮璧板悜
-                    theme = phrase_motifs.get(0, rng.choice(motifs))
+                    theme = phrase_motifs.get(0, melody_rng.choice(motifs))
                     # 淇濇寔鑺傚锛屾敼鍙橀煶楂樻ā寮?
-                    phrase_motifs[phrase_idx] = [(rel + (1 if rng.random() < 0.5 else -1), dur) for rel, dur in theme]
+                    phrase_motifs[phrase_idx] = [(rel + (1 if melody_rng.random() < 0.5 else -1), dur) for rel, dur in theme]
                 elif phrase_role == "resolution":
                     # 瑙ｅ喅锛氬洖褰掍富棰橈紝浣嗙畝鍖?
-                    theme = phrase_motifs.get(0, rng.choice(motifs))
+                    theme = phrase_motifs.get(0, melody_rng.choice(motifs))
                     # 浣跨敤涓婚鐨勫墠鍗婇儴鍒?
                     phrase_motifs[phrase_idx] = theme[:len(theme)//2] if len(theme) > 2 else theme
                 else:
                     # 鍏朵粬锛氱洿鎺ヤ娇鐢ㄤ富棰樻垨杞诲井鍙樺
-                    if rng.random() < 0.6:
-                        phrase_motifs[phrase_idx] = phrase_motifs.get(0, rng.choice(motifs))
+                    if melody_rng.random() < 0.6:
+                        phrase_motifs[phrase_idx] = phrase_motifs.get(0, melody_rng.choice(motifs))
                     else:
-                        phrase_motifs[phrase_idx] = rng.choice(motifs)
+                        phrase_motifs[phrase_idx] = melody_rng.choice(motifs)
         
         # 鑾峰彇褰撳墠涔愬彞鐨勫姩鏈?
-        motif = phrase_motifs.get(phrase_idx, rng.choice(motifs))
+        motif = phrase_motifs.get(phrase_idx, melody_rng.choice(motifs))
         
         # 鍙ュ紡鎺у埗锛氭牴鎹箰鍙ヨ鑹茶皟鏁撮煶楂樹腑蹇?
         phrase_shift = 0
-        if phrase_role == "variation":
+        if free_form:
+            phrase_shift = melody_rng.randint(-1, 3)
+        elif phrase_role == "variation":
             phrase_shift = 2  # 鍙樺涔愬彞鎶珮
         elif phrase_role == "resolution":
             phrase_shift = 0  # 瑙ｅ喅涔愬彞鍥炲綊
@@ -354,7 +397,7 @@ def generate_simple_project_from_seed(
             phrase_shift = 1  # 绛斿彞鐣ュ井鎶珮
 
         # 鎽囨粴椋庢牸锛氬湪variation闃舵鐢熸垚solo锛堝揩閫熴€佸瘑闆嗙殑闊崇锛?
-        if style == SeedMusicStyle.ROCK and phrase_role == "variation":
+        if not free_form and style == SeedMusicStyle.ROCK and phrase_role == "variation":
             # Solo鐗瑰緛锛氬揩閫熴€佸瘑闆嗐€侀煶闃惰窇鍔?
             # 浣跨敤鍗佸叚鍒嗛煶绗︼紙0.25鎷嶏級鐢熸垚蹇€熻窇鍔紝纭繚瑕嗙洊鏁翠釜灏忚妭
             beat_in_bar = 0.0
@@ -379,15 +422,15 @@ def generate_simple_project_from_seed(
                 if is_strong_beat or note_idx == 0:
                     # 寮烘媿鎴栫涓€涓煶锛氫娇鐢ㄥ拰寮﹂煶
                     chord_tones = [0, 2, 4]
-                    base_degree = bar_root_degree + rng.choice(chord_tones)
+                    base_degree = bar_root_degree + melody_rng.choice(chord_tones)
                 else:
                     # 寮辨媿锛氶煶闃惰窇鍔紙绾ц繘鎴栧皬璺筹級
-                    if rng.random() < 0.6:
+                    if melody_rng.random() < 0.6:
                         # 60%姒傜巼绾ц繘锛?1鎴?1锛?
-                        base_degree = solo_last_degree + rng.choice([-1, 1])
+                        base_degree = solo_last_degree + melody_rng.choice([-1, 1])
                     else:
                         # 40%姒傜巼灏忚烦锛?2鎴?2锛?
-                        base_degree = solo_last_degree + rng.choice([-2, 2])
+                        base_degree = solo_last_degree + melody_rng.choice([-2, 2])
                 
                 # 鍙犲姞鍙ュ紡鍋忕Щ锛坴ariation闃舵鎶珮锛?
                 base_degree += phrase_shift
@@ -401,9 +444,9 @@ def generate_simple_project_from_seed(
                 
                 # Solo鍔涘害锛氬姩鎬佸彉鍖栵紝寮烘媿鏇撮噸
                 if is_strong_beat:
-                    solo_velocity = int(100 + rng.uniform(-10, 15))
+                    solo_velocity = int(100 + melody_rng.uniform(-10, 15))
                 else:
-                    solo_velocity = int(85 + rng.uniform(-10, 10))
+                    solo_velocity = int(85 + melody_rng.uniform(-10, 10))
                 solo_velocity = max(70, min(127, solo_velocity))
                 
                 start_time = global_beat * beat_duration
@@ -464,7 +507,7 @@ def generate_simple_project_from_seed(
                             rest_prob = 0.25  # 榛樿
 
                         # 涓洪伩鍏嶃€岄煶绗﹂兘闆嗕腑鍦ㄥ墠鍗婂皬鑺傘€嶏紝浠呭湪鍓?2 鎷嶅厑璁镐紤姝紝鍚?2 鎷嶄繚鎸佽緝楂樺～鍏呭害
-                        if rng.random() < rest_prob and beat_in_bar < beats_per_bar * 0.5:
+                        if melody_rng.random() < rest_prob and beat_in_bar < beats_per_bar * 0.5:
                             beat_in_bar += dur_beats
                             continue
                     
@@ -473,20 +516,20 @@ def generate_simple_project_from_seed(
                             # 鎮枒锛氬己鎷嶆湁鏇撮珮姒傜巼钀藉湪銆屽嵄闄╅煶銆嶏細鈾?銆佲櫗6銆佲櫗7锛堢浉瀵逛簬褰撳墠鍜屽鸡鏍归煶锛?
                             # 杩欓噷浣跨敤鐩稿搴︽暟 1, 5, 6锛堝搴?scale_offsets 涓殑鍗婇煶闃朵綅缃級
                             tense_choices = [1, 5, 6]
-                            if rng.random() < 0.6:
-                                base_degree = bar_root_degree + rng.choice(tense_choices)
+                            if melody_rng.random() < 0.6:
+                                base_degree = bar_root_degree + melody_rng.choice(tense_choices)
                             else:
                                 chord_tones = [0, 2, 4]  # 浠嶄繚鐣欏皯閲?1,3,5 浠ョ淮鎸佸彲鍚€?
-                                base_degree = bar_root_degree + rng.choice(chord_tones)
+                                base_degree = bar_root_degree + melody_rng.choice(chord_tones)
                         else:
                             chord_tones = [0, 2, 4]  # 1,3,5
-                            base_degree = bar_root_degree + rng.choice(chord_tones)
+                            base_degree = bar_root_degree + melody_rng.choice(chord_tones)
                     else:
                         # 寮辨媿鍙互鐢ㄧ粡杩囬煶 / 閭婚煶锛堝湪鍜屽鸡搴︽暟闄勮繎娴姩锛?
                         base_degree = bar_root_degree + rel_degree
-                        if style == SeedMusicStyle.SUSPENSE and rng.random() < 0.25:
+                        if style == SeedMusicStyle.SUSPENSE and melody_rng.random() < 0.25:
                             # 鍦ㄩ儴鍒嗗急鎷嶄笂澧炲姞鍗婇煶閭婚煶鎶栧姩锛屽埗閫犱笉瀹夌殑"鏃ユ湰灏忚皟"鍛抽亾
-                            jitter = rng.choice([-1, 1])
+                            jitter = melody_rng.choice([-1, 1])
                             base_degree += jitter
 
                     # 鍙犲姞鍙ュ紡鍋忕Щ
@@ -528,7 +571,7 @@ def generate_simple_project_from_seed(
                     tonic_degree = chord_root_degree(1)  # 涓婚煶搴︽暟
                     is_phrase_end = phrase_plan.is_phrase_end(bar_idx, phrase_idx)
                     
-                    if is_phrase_end or (is_strong_beat and rng.random() < 0.3):
+                    if is_phrase_end or (is_strong_beat and melody_rng.random() < 0.3):
                         # 涔愬彞缁撳熬鎴?0%鐨勫己鎷嶏細鍥炲綊涓婚煶
                         if abs(base_degree - tonic_degree) > 3:
                             # 濡傛灉绂讳富闊冲お杩滐紝鍚戜富闊抽潬鎷?
@@ -563,7 +606,7 @@ def generate_simple_project_from_seed(
                                 melody_track.notes[-2].pitch == last_pitch and
                                 pitch == last_pitch):
                             # 灏濊瘯寰€涓婃垨寰€涓嬪崐闊抽樁绉诲姩涓€涓煶闃跺害鏁?
-                            adjust = 1 if rng.random() < 0.5 else -1
+                            adjust = 1 if melody_rng.random() < 0.5 else -1
                             adj_degree = degree_clamped + adjust
                             adj_degree = max(0, min(adj_degree, len(scale_offsets) - 1))
                             pitch = root_midi + scale_offsets[adj_degree]
@@ -588,7 +631,7 @@ def generate_simple_project_from_seed(
                     if is_strong_beat:
                         base_velocity = int(100 + 20 * rhythm_intensity)
                     else:
-                        base_velocity = int(80 + 15 * rhythm_intensity * rng.random())
+                        base_velocity = int(80 + 15 * rhythm_intensity * melody_rng.random())
 
                     if style == SeedMusicStyle.BATTLE:
                         # 鎴樻枟锛氫富鏃嬪緥鏁翠綋鏇寸獊鍑轰竴浜涳紱鍙樹綋鍙啀寰皟
@@ -600,7 +643,7 @@ def generate_simple_project_from_seed(
                             base_velocity = min(127, int(base_velocity * 1.2))
                     elif style == SeedMusicStyle.SUSPENSE:
                         # 鎮枒锛氫富鏃嬪緥鏃㈣鍔ㄦ€佽捣浼忥紝鍙堣鍘嬭繃鑳屾櫙
-                        jitter = int(rng.uniform(-10, 10))
+                        jitter = int(melody_rng.uniform(-10, 10))
                         base_velocity = max(55, min(127, int(base_velocity * 1.15) + jitter))
                     elif style == SeedMusicStyle.CALM:
                         # 鑸掔紦锛氭暣浣撳姏搴︽洿鏌斿拰
@@ -673,7 +716,7 @@ def generate_simple_project_from_seed(
                             duration = max(0.25 * beat_duration, duration_beats_for_time * beat_duration)
 
                             # 鍦ㄥ己鎷嶄笂娣诲姞鍙犻煶锛堝舰鎴愬拰寮︽劅锛?
-                            will_add_overlay = is_strong_beat and rng.random() < 0.4  # 40%姒傜巼娣诲姞鍙犻煶
+                            will_add_overlay = is_strong_beat and melody_rng.random() < 0.4  # 40%姒傜巼娣诲姞鍙犻煶
                             
                             # 濡傛灉鏈夊彔闊筹紝闄嶄綆涓婚煶鍔涘害锛岄伩鍏嶅彔鍔犲悗闊抽噺绐佺劧澧炲ぇ
                             if will_add_overlay:
@@ -696,7 +739,7 @@ def generate_simple_project_from_seed(
                             # 娣诲姞鍙犻煶
                             if will_add_overlay:
                                 # 閫夋嫨娣诲姞涓夊害鎴栦簲搴﹀彔闊?
-                                overlay_choice = rng.choice(["third", "fifth"])
+                                overlay_choice = melody_rng.choice(["third", "fifth"])
                                 if overlay_choice == "third":
                                     # 娣诲姞涓夊害锛?2涓害鏁帮級
                                     overlay_degree = degree_clamped + 2
@@ -747,7 +790,9 @@ def generate_simple_project_from_seed(
     project.add_track(melody_track)
 
     track_build_context = TrackBuildContext(
-        rng=rng,
+        bass_rng=bass_rng,
+        harmony_rng=harmony_rng,
+        drum_rng=drum_rng,
         style=style,
         variant_id=variant_id,
         style_params=style_params,
@@ -761,6 +806,7 @@ def generate_simple_project_from_seed(
         scale_offsets=tuple(scale_offsets),
         quiet_bars=quiet_bars,
         dance_harmony_start_bar=dance_harmony_start_bar,
+        drum_density=drum_density,
     )
 
     bass_track = build_bass_track(track_build_context, enable_bass=enable_bass)

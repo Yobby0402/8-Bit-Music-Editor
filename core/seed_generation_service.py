@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from core.models import Project
 from core.seed_music_generator import generate_simple_project_from_seed
 from core.seed_style_catalog import SeedMusicStyle
+from core.variation_spec import VariationSpec
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class SeedGenerationRequest:
     variant_id: str = "default"
     use_harmony: bool = True
     use_drums: bool = True
+    variation: VariationSpec | None = None
 
     def normalized(self) -> "SeedGenerationRequest":
         """返回标准化后的请求副本。"""
@@ -38,6 +40,7 @@ class SeedGenerationRequest:
             variant_id=variant_id or "default",
             use_harmony=bool(self.use_harmony),
             use_drums=bool(self.use_drums),
+            variation=self.variation,
         )
 
 
@@ -72,5 +75,6 @@ def generate_seed_project(request: SeedGenerationRequest) -> SeedGenerationResul
         enable_bass=True,
         enable_harmony=normalized_request.use_harmony,
         enable_drums=normalized_request.use_drums,
+        variation=normalized_request.variation,
     )
     return SeedGenerationResult(request=normalized_request, project=project)

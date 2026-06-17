@@ -3,8 +3,9 @@
 """
 
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Tuple
 
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -15,6 +16,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPushButton,
     QScrollArea,
     QSpinBox,
     QTextEdit,
@@ -22,8 +24,13 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from core.llm_seed_prompts import build_seed_suggest_messages
 from core.models import Track, TrackRole, TrackType
 from core.seed_style_catalog import SeedMusicStyle, get_style_meta, get_style_variants
+from core.variation_spec import parse_ai_seed_response
+from ui.background_tasks import LlmHttpThread
+from ui.qt_thread_debug import thread_log
+from ui.settings_manager import get_settings_manager
 
 
 @dataclass(frozen=True)
@@ -39,6 +46,9 @@ class SeedGenerationSelection:
     length_index: int
     style_index: int
     variant_index: int
+    music_description: str = ""
+    ai_knobs: Tuple[int, int, int, int] | None = None
+    free_form_layout: bool = False
 
 
 @dataclass(frozen=True)
@@ -86,6 +96,16 @@ class _SeedGenerateDialog(QDialog):
         last_variant_index = last_settings.get("variant_index", 0) if last_settings else 0
         last_harmony = last_settings.get("harmony", True) if last_settings else True
         last_drums = last_settings.get("drums", True) if last_settings else True
+        last_desc = (last_settings.get("music_description", "") if last_settings else "") or ""
+        kn_last = last_settings.get("ai_knobs") if last_settings else None
+        last_free_form = bool(last_settings.get("free_form_layout", False)) if last_settings else False
+        self._ai_knobs: Tuple[int, int, int, int] | None = None
+        if isinstance(kn_last, (list, tuple)) and len(kn_last) == 4:
+            try:
+                self._ai_knobs = (int(kn_last[0]), int(kn_last[1]), int(kn_last[2]), int(kn_last[3]))
+            except (TypeError, ValueError):
+                self._ai_knobs = None
+        self._llm_thread: LlmHttpThread | None = None
 
         seed_row = QHBoxLayout()
         seed_label = QLabel("种子：")
@@ -94,6 +114,23 @@ class _SeedGenerateDialog(QDialog):
         seed_row.addWidget(seed_label)
         seed_row.addWidget(self.seed_edit)
         layout.addLayout(seed_row)
+
+        desc_row = QHBoxLayout()
+        desc_row.addWidget(QLabel("大致描述（可选）："))
+        self.desc_edit = QLineEdit()
+        self.desc_edit.setPlaceholderText(
+            "例如：深夜森林、略带忧伤的关底… 会基于描述增加变化（无需 AI 也会用哈希盐）"
+        )
+        self.desc_edit.setText(last_desc)
+        desc_row.addWidget(self.desc_edit, 1)
+        layout.addLayout(desc_row)
+
+        ai_row = QHBoxLayout()
+        self.ai_suggest_button = QPushButton("用本地 AI 建议种子…")
+        self.ai_suggest_button.clicked.connect(self._on_ai_suggest_seed)
+        ai_row.addWidget(self.ai_suggest_button)
+        ai_row.addStretch(1)
+        layout.addLayout(ai_row)
 
         length_row = QHBoxLayout()
         length_label = QLabel("音乐长度：")
@@ -124,6 +161,11 @@ class _SeedGenerateDialog(QDialog):
         font.setPointSize(max(9, font.pointSize() - 1))
         self.structure_info_label.setFont(font)
         layout.addWidget(self.structure_info_label)
+
+        self.free_form_checkbox = QCheckBox("自由编排（弱化固定乐句/和声循环，变化更大）")
+        self.free_form_checkbox.setChecked(last_free_form)
+        self.free_form_checkbox.stateChanged.connect(self._on_length_preset_changed)
+        layout.addWidget(self.free_form_checkbox)
 
         track_row = QHBoxLayout()
         track_label = QLabel("轨道：")
@@ -243,6 +285,11 @@ class _SeedGenerateDialog(QDialog):
             128: "结构：32 个乐句，每个 4 小节（完整作品：包含所有部分，适合完整曲子）",
         }
         desc = structure_descriptions.get(bars, f"结构：{bars} 小节")
+        if getattr(self, "free_form_checkbox", None) is not None and self.free_form_checkbox.isChecked():
+            desc = (
+                f"{desc}\n\n已启用自由编排：Intro 长度、乐句分段、和弦级数与动机池会更随机，"
+                "不再严格按「起承转合」固定套路。"
+            )
         self.structure_info_label.setText(desc)
 
     def get_selection(self) -> SeedGenerationSelection:
@@ -257,7 +304,116 @@ class _SeedGenerateDialog(QDialog):
             length_index=self.length_preset_combo.currentIndex(),
             style_index=self.style_combo.currentIndex(),
             variant_index=self.variant_combo.currentIndex(),
+            music_description=self.desc_edit.text().strip(),
+            ai_knobs=self._ai_knobs,
+            free_form_layout=self.free_form_checkbox.isChecked(),
         )
+
+    def closeEvent(self, event):
+        self._cleanup_llm_thread()
+        super().closeEvent(event)
+
+    def _cleanup_llm_thread(self) -> None:
+        t = self._llm_thread
+        if t is None:
+            return
+        thread_log(f"SeedDialog cleanup_llm_thread isRunning={t.isRunning()}")
+        if t.isRunning():
+            # LlmHttpThread.run() 内同步阻塞 httpx；无子线程事件循环，wait 直到请求结束或超时
+            if not t.wait(120000):
+                thread_log("SeedDialog cleanup_llm_thread wait(120s) returned False")
+        self._llm_thread = None
+        t.deleteLater()
+        self.ai_suggest_button.setEnabled(True)
+
+    def _on_ai_suggest_seed(self) -> None:
+        sm = get_settings_manager()
+        if not sm.is_ai_enabled():
+            QMessageBox.information(
+                self,
+                "本地 AI",
+                "请先在「设置 → 本地 AI (LM Studio)」中勾选「启用本地 AI 功能」。",
+            )
+            return
+        model = sm.get_ai_model()
+        if not model:
+            QMessageBox.warning(self, "本地 AI", "请在设置中填写「模型 ID」（与 LM Studio 中一致）。")
+            return
+
+        style_label = self.style_combo.currentText()
+        user_desc = self.desc_edit.text().strip()
+        messages = build_seed_suggest_messages(style_label, user_desc)
+
+        self._cleanup_llm_thread()
+        self.ai_suggest_button.setEnabled(False)
+
+        thread = LlmHttpThread(
+            sm.get_ai_base_url(),
+            model,
+            messages,
+            api_key=sm.get_ai_api_key(),
+            timeout_sec=float(sm.get_ai_timeout_sec()),
+            parent=None,
+        )
+        self._llm_thread = thread
+        thread.success.connect(self._on_llm_http_success, type=Qt.QueuedConnection)
+        thread.failed.connect(self._on_llm_http_failed, type=Qt.QueuedConnection)
+        thread.finished.connect(self._on_llm_http_thread_finished, type=Qt.QueuedConnection)
+        thread_log("LlmHttpThread.start()")
+        thread.start()
+
+    def _on_llm_http_thread_finished(self) -> None:
+        thr = self._llm_thread
+        thread_log(
+            f"LlmHttpThread.finished thr_is_none={thr is None} "
+            f"isFinished={thr.isFinished() if thr else 'n/a'}"
+        )
+        if thr is None:
+            return
+        self._llm_thread = None
+        thr.deleteLater()
+
+    def _on_llm_http_success(self, text: str) -> None:
+        thread_log("LlmHttpThread.success")
+        self.ai_suggest_button.setEnabled(True)
+        self._on_ai_worker_finished(text)
+
+    def _on_llm_http_failed(self, err: object) -> None:
+        thread_log(f"LlmHttpThread.failed err={err!r}")
+        self.ai_suggest_button.setEnabled(True)
+        self._on_ai_worker_failed(err)
+
+    def _on_ai_worker_finished(self, text: object) -> None:
+        def apply_and_notify() -> None:
+            try:
+                raw = "" if text is None else str(text)
+                seed_line, knobs = parse_ai_seed_response(raw)
+                if seed_line:
+                    self.seed_edit.setText(seed_line)
+                if knobs is not None:
+                    self._ai_knobs = knobs
+                QMessageBox.information(
+                    self,
+                    "本地 AI",
+                    "已根据模型输出更新种子文本"
+                    + ("与旋钮参数。" if knobs is not None else "。"),
+                )
+            except Exception as exc:
+                QMessageBox.critical(
+                    self,
+                    "本地 AI",
+                    f"处理模型返回时出错：{exc}",
+                )
+
+        QTimer.singleShot(0, apply_and_notify)
+
+    def _on_ai_worker_failed(self, err: object) -> None:
+        err_text = str(err) if err is not None else "未知错误"
+
+        def notify() -> None:
+            QMessageBox.warning(self, "本地 AI 请求失败", err_text)
+
+        QTimer.singleShot(0, notify)
 
 
 def prompt_new_track(parent, track_count: int) -> Optional[NewTrackSelection]:

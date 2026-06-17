@@ -25,7 +25,9 @@ def _build_context(
     variant_behavior = build_variant_behavior(style, variant_id, rng, length_bars)
 
     return seed_track_builders.TrackBuildContext(
-        rng=rng,
+        bass_rng=rng,
+        harmony_rng=rng,
+        drum_rng=rng,
         style=style,
         variant_id=variant_id,
         style_params=style_config.style_params,
@@ -39,6 +41,7 @@ def _build_context(
         scale_offsets=tuple(scale_offsets),
         quiet_bars=variant_behavior.quiet_bars,
         dance_harmony_start_bar=dance_harmony_start_bar,
+        drum_density=5,
     )
 
 

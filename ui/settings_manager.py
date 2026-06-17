@@ -42,6 +42,12 @@ class SettingsManager(QObject):
         "waveform_color_sawtooth": "#FFE66D",
         "waveform_color_sine": "#95E1D3",
         "waveform_color_noise": "#969696",
+        # 本地 LLM（LM Studio 等，OpenAI 兼容）
+        "ai_enabled": False,
+        "ai_base_url": "http://127.0.0.1:1234/v1",
+        "ai_model": "",
+        "ai_timeout_sec": 120,
+        "ai_api_key": "",
     }
     
     def __init__(self, parent=None):
@@ -248,6 +254,37 @@ class SettingsManager(QObject):
     def set_velocity_opacity_enabled(self, enabled: bool):
         """设置是否启用根据力度显示透明度"""
         self.set("show_velocity_opacity", bool(enabled))
+
+    def is_ai_enabled(self) -> bool:
+        return bool(self.get("ai_enabled", False))
+
+    def set_ai_enabled(self, enabled: bool) -> None:
+        self.set("ai_enabled", bool(enabled))
+
+    def get_ai_base_url(self) -> str:
+        return str(self.get("ai_base_url", self.DEFAULT_SETTINGS["ai_base_url"])).strip()
+
+    def set_ai_base_url(self, url: str) -> None:
+        self.set("ai_base_url", (url or "").strip() or self.DEFAULT_SETTINGS["ai_base_url"])
+
+    def get_ai_model(self) -> str:
+        return str(self.get("ai_model", self.DEFAULT_SETTINGS["ai_model"])).strip()
+
+    def set_ai_model(self, model: str) -> None:
+        self.set("ai_model", (model or "").strip())
+
+    def get_ai_timeout_sec(self) -> int:
+        v = int(self.get("ai_timeout_sec", self.DEFAULT_SETTINGS["ai_timeout_sec"]))
+        return max(5, min(600, v))
+
+    def set_ai_timeout_sec(self, seconds: int) -> None:
+        self.set("ai_timeout_sec", max(5, min(600, int(seconds))))
+
+    def get_ai_api_key(self) -> str:
+        return str(self.get("ai_api_key", self.DEFAULT_SETTINGS["ai_api_key"]))
+
+    def set_ai_api_key(self, key: str) -> None:
+        self.set("ai_api_key", str(key or ""))
 
 
 # 全局设置管理器实例

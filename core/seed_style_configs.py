@@ -99,7 +99,8 @@ class MusicStyleConfig(ABC):
         beats_per_bar: float,
         variant_id: Optional[str] = None,
         intro_bars: int = 0,
-        quiet_bars: Optional[set] = None
+        quiet_bars: Optional[set] = None,
+        drum_density: int = 5,
     ) -> List[DrumEvent]:
         """
         生成该小节的鼓点事件。
@@ -152,6 +153,17 @@ class MusicStyleConfig(ABC):
             duration_beats=0.25,
             velocity=int(100 * self.style_params.drum_velocity_scale),
         ))
+        if drum_density >= 8:
+            v = int(42 * self.style_params.drum_velocity_scale)
+            for hb in (0.5, 1.5, 2.5, 3.5):
+                events.append(
+                    DrumEvent(
+                        drum_type=DrumType.HIHAT,
+                        start_beat=bar_start + hb,
+                        duration_beats=0.125,
+                        velocity=v,
+                    )
+                )
         return events
     
     def apply_melody_effects(self, melody_track: Track) -> None:
@@ -256,7 +268,8 @@ class Classic8bitStyleConfig(MusicStyleConfig):
         beats_per_bar: float,
         variant_id: Optional[str] = None,
         intro_bars: int = 0,
-        quiet_bars: Optional[set] = None
+        quiet_bars: Optional[set] = None,
+        drum_density: int = 5,
     ) -> List[DrumEvent]:
         events = []
         
@@ -310,6 +323,17 @@ class Classic8bitStyleConfig(MusicStyleConfig):
                 velocity=int(100 * self.style_params.drum_velocity_scale),
             ))
         
+        if drum_density >= 6:
+            v = int((32 + drum_density * 4) * self.style_params.drum_velocity_scale)
+            for hb in (0.5, 1.5, 2.5, 3.5):
+                events.append(
+                    DrumEvent(
+                        drum_type=DrumType.HIHAT,
+                        start_beat=bar_start + hb,
+                        duration_beats=0.125,
+                        velocity=v,
+                    )
+                )
         return events
     
     def get_track_volumes(self, variant_id: Optional[str] = None) -> Dict[str, float]:
@@ -393,7 +417,8 @@ class LofiStyleConfig(MusicStyleConfig):
         beats_per_bar: float,
         variant_id: Optional[str] = None,
         intro_bars: int = 0,
-        quiet_bars: Optional[set] = None
+        quiet_bars: Optional[set] = None,
+        drum_density: int = 5,
     ) -> List[DrumEvent]:
         events = []
         
@@ -524,7 +549,8 @@ class BattleStyleConfig(MusicStyleConfig):
         beats_per_bar: float,
         variant_id: Optional[str] = None,
         intro_bars: int = 0,
-        quiet_bars: Optional[set] = None
+        quiet_bars: Optional[set] = None,
+        drum_density: int = 5,
     ) -> List[DrumEvent]:
         events = []
         base_kick_vel = 125
@@ -801,7 +827,8 @@ class CalmStyleConfig(MusicStyleConfig):
         beats_per_bar: float,
         variant_id: Optional[str] = None,
         intro_bars: int = 0,
-        quiet_bars: Optional[set] = None
+        quiet_bars: Optional[set] = None,
+        drum_density: int = 5,
     ) -> List[DrumEvent]:
         events = []
         
@@ -929,7 +956,8 @@ class RockStyleConfig(MusicStyleConfig):
         beats_per_bar: float,
         variant_id: Optional[str] = None,
         intro_bars: int = 0,
-        quiet_bars: Optional[set] = None
+        quiet_bars: Optional[set] = None,
+        drum_density: int = 5,
     ) -> List[DrumEvent]:
         events = []
         
@@ -1118,7 +1146,8 @@ class WorkshopStyleConfig(MusicStyleConfig):
         beats_per_bar: float,
         variant_id: Optional[str] = None,
         intro_bars: int = 0,
-        quiet_bars: Optional[set] = None
+        quiet_bars: Optional[set] = None,
+        drum_density: int = 5,
     ) -> List[DrumEvent]:
         events = []
         
@@ -1266,7 +1295,8 @@ class DanceStyleConfig(MusicStyleConfig):
         beats_per_bar: float,
         variant_id: Optional[str] = None,
         intro_bars: int = 0,
-        quiet_bars: Optional[set] = None
+        quiet_bars: Optional[set] = None,
+        drum_density: int = 5,
     ) -> List[DrumEvent]:
         events = []
         

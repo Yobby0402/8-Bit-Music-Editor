@@ -7,6 +7,7 @@
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import (
+    QCheckBox,
     QColorDialog,
     QComboBox,
     QDialog,
@@ -14,6 +15,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
@@ -80,6 +82,7 @@ class SettingsDialog(QDialog):
         self.add_category("示波器设置", self.create_oscilloscope_settings())
         self.add_category("快捷键", self.create_shortcut_settings())
         self.add_category("其他设置", self.create_other_settings())
+        self.add_category("本地 AI (LM Studio)", self.create_ai_settings())
         
         # 默认选择第一个分类
         self.category_list.setCurrentRow(0)
@@ -457,14 +460,66 @@ class SettingsDialog(QDialog):
         widget = QWidget()
         layout = QVBoxLayout()
         widget.setLayout(layout)
-        
-        # 占位文本
-        placeholder = QLabel("其他设置项将在此处显示")
-        placeholder.setAlignment(Qt.AlignCenter)
-        layout.addWidget(placeholder)
-        
+
+        hint = QLabel("预留：后续可在此加入其他杂项开关。")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
         layout.addStretch()
-        
+
+        return widget
+
+    def create_ai_settings(self) -> QWidget:
+        """本地 OpenAI 兼容 API（如 LM Studio）。"""
+        widget = QWidget()
+        layout = QVBoxLayout()
+        widget.setLayout(layout)
+
+        intro = QLabel(
+            "在「从 Seed 生成音乐」对话框中可使用「用本地 AI 建议种子」。"
+            "请先在 LM Studio 中启动本地服务器并加载模型。"
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        self.ai_enabled_checkbox = QCheckBox("启用本地 AI 功能")
+        self.ai_enabled_checkbox.setChecked(self.settings_manager.is_ai_enabled())
+        layout.addWidget(self.ai_enabled_checkbox)
+
+        url_row = QHBoxLayout()
+        url_row.addWidget(QLabel("API 根地址："))
+        self.ai_base_url_edit = QLineEdit()
+        self.ai_base_url_edit.setText(self.settings_manager.get_ai_base_url())
+        self.ai_base_url_edit.setPlaceholderText("http://127.0.0.1:1234/v1")
+        url_row.addWidget(self.ai_base_url_edit, 1)
+        layout.addLayout(url_row)
+
+        model_row = QHBoxLayout()
+        model_row.addWidget(QLabel("模型 ID："))
+        self.ai_model_edit = QLineEdit()
+        self.ai_model_edit.setText(self.settings_manager.get_ai_model())
+        self.ai_model_edit.setPlaceholderText("与 LM Studio 中显示的模型标识一致")
+        model_row.addWidget(self.ai_model_edit, 1)
+        layout.addLayout(model_row)
+
+        timeout_row = QHBoxLayout()
+        timeout_row.addWidget(QLabel("超时（秒）："))
+        self.ai_timeout_spin = QSpinBox()
+        self.ai_timeout_spin.setRange(5, 600)
+        self.ai_timeout_spin.setValue(self.settings_manager.get_ai_timeout_sec())
+        timeout_row.addWidget(self.ai_timeout_spin)
+        timeout_row.addStretch()
+        layout.addLayout(timeout_row)
+
+        key_row = QHBoxLayout()
+        key_row.addWidget(QLabel("API Key（可选）："))
+        self.ai_api_key_edit = QLineEdit()
+        self.ai_api_key_edit.setEchoMode(QLineEdit.Password)
+        self.ai_api_key_edit.setText(self.settings_manager.get_ai_api_key())
+        key_row.addWidget(self.ai_api_key_edit, 1)
+        layout.addLayout(key_row)
+
+        layout.addStretch()
         return widget
     
     def apply_theme(self):
@@ -550,6 +605,13 @@ class SettingsDialog(QDialog):
             current_view_mode = self.settings_manager.get_playback_view_mode()
             current_index = self.playback_view_mode_combo.findData(current_view_mode)
             self.playback_view_mode_combo.setCurrentIndex(max(0, current_index))
+
+        if hasattr(self, "ai_enabled_checkbox"):
+            self.ai_enabled_checkbox.setChecked(self.settings_manager.is_ai_enabled())
+            self.ai_base_url_edit.setText(self.settings_manager.get_ai_base_url())
+            self.ai_model_edit.setText(self.settings_manager.get_ai_model())
+            self.ai_timeout_spin.setValue(self.settings_manager.get_ai_timeout_sec())
+            self.ai_api_key_edit.setText(self.settings_manager.get_ai_api_key())
 
         # 重新加载快捷键表
         self.load_shortcuts_to_table()
@@ -801,7 +863,14 @@ class SettingsDialog(QDialog):
                     shortcut = shortcut_item.text()
                     if key:
                         self.shortcut_manager.set_shortcut(key, shortcut)
-    
+
+        if hasattr(self, "ai_enabled_checkbox"):
+            self.settings_manager.set_ai_enabled(self.ai_enabled_checkbox.isChecked())
+            self.settings_manager.set_ai_base_url(self.ai_base_url_edit.text())
+            self.settings_manager.set_ai_model(self.ai_model_edit.text())
+            self.settings_manager.set_ai_timeout_sec(self.ai_timeout_spin.value())
+            self.settings_manager.set_ai_api_key(self.ai_api_key_edit.text())
+
     def accept(self):
         """确认设置"""
         self.apply_settings()

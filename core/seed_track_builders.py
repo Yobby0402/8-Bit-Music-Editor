@@ -20,7 +20,9 @@ from .seed_style_configs import MusicStyleConfig
 class TrackBuildContext:
     """描述非主旋律轨道构建所需的共享上下文。"""
 
-    rng: random.Random
+    bass_rng: random.Random
+    harmony_rng: random.Random
+    drum_rng: random.Random
     style: SeedMusicStyle
     variant_id: str
     style_params: StyleParams
@@ -34,6 +36,7 @@ class TrackBuildContext:
     scale_offsets: tuple[int, ...]
     quiet_bars: frozenset[int]
     dance_harmony_start_bar: int = 0
+    drum_density: int = 5
 
 
 def build_bass_track(context: TrackBuildContext, *, enable_bass: bool) -> Track | None:
@@ -84,7 +87,7 @@ def build_bass_track(context: TrackBuildContext, *, enable_bass: bool) -> Track 
             bass_root_pitch = context.root_midi - 12 + context.scale_offsets[bar_root_degree]
 
         bass_pattern = context.style_config.get_bass_pattern(
-            context.rng,
+            context.bass_rng,
             bar_idx,
             bar_root_degree,
             context.root_midi,
@@ -113,7 +116,7 @@ def build_bass_track(context: TrackBuildContext, *, enable_bass: bool) -> Track 
                 duration_beats_for_time = dur_beats
 
             duration = duration_beats_for_time * context.beat_duration
-            will_add_octave = is_strong_beat and context.rng.random() < 0.3
+            will_add_octave = is_strong_beat and context.bass_rng.random() < 0.3
 
             if will_add_octave:
                 bass_velocity = max(70, int(base_velocity * 0.75))
@@ -132,7 +135,7 @@ def build_bass_track(context: TrackBuildContext, *, enable_bass: bool) -> Track 
             bass_track.notes.append(note)
 
             if will_add_octave:
-                octave_choice = context.rng.choice(["lower", "higher"])
+                octave_choice = context.bass_rng.choice(["lower", "higher"])
                 if octave_choice == "lower":
                     overlay_pitch = bass_root_pitch - 12
                 else:
@@ -175,7 +178,7 @@ def build_harmony_track(context: TrackBuildContext, *, enable_harmony: bool) -> 
             phrase_role = context.phrase_plan.phrase_role(phrase_idx)
 
         chord_degrees = context.style_config.get_harmony_chord_degrees(
-            context.rng,
+            context.harmony_rng,
             bar_root_degree,
             bar_idx,
             phrase_role or "statement",
@@ -300,7 +303,7 @@ def build_drum_track(
             is_phrase_end = context.phrase_plan.is_phrase_end(bar_idx)
 
         drum_events = context.style_config.generate_drum_pattern(
-            context.rng,
+            context.drum_rng,
             bar_idx,
             bar_start,
             phrase_role,
@@ -310,6 +313,7 @@ def build_drum_track(
             context.variant_id,
             context.phrase_plan.intro_bars,
             context.quiet_bars,
+            context.drum_density,
         )
 
         for event in drum_events:

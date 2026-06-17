@@ -13,12 +13,14 @@ from core.seed_generation_service import (
     SeedGenerationResult,
     generate_seed_project,
 )
+from core.variation_spec import VariationSpec, variation_salt_from_description
 from ui.error_utils import show_error_with_console
 from ui.main_window_dialogs import prompt_seed_generation
 
 
 def build_seed_generation_settings(selection: Any) -> dict[str, object]:
     """将对话框选择转换为可持久化的最近一次设置。"""
+    knobs = getattr(selection, "ai_knobs", None)
     return {
         "seed": selection.seed,
         "length_index": selection.length_index,
@@ -26,11 +28,32 @@ def build_seed_generation_settings(selection: Any) -> dict[str, object]:
         "variant_index": selection.variant_index,
         "harmony": selection.use_harmony,
         "drums": selection.use_drums,
+        "music_description": getattr(selection, "music_description", "") or "",
+        "ai_knobs": list(knobs) if knobs is not None else None,
+        "free_form_layout": bool(getattr(selection, "free_form_layout", False)),
     }
 
 
 def build_seed_generation_request(selection: Any) -> SeedGenerationRequest | None:
     """将 UI 选择转换为核心服务请求。"""
+    desc = (getattr(selection, "music_description", None) or "").strip()
+    knobs = getattr(selection, "ai_knobs", None)
+    free_form = bool(getattr(selection, "free_form_layout", False))
+    salt = variation_salt_from_description(desc) if desc else ""
+    if not salt and knobs is not None:
+        salt = variation_salt_from_description(f"{selection.seed}|{knobs!s}")
+    if not salt and knobs is None and free_form:
+        salt = variation_salt_from_description(
+            f"free_form|{selection.seed}|{selection.length_bars}"
+        )
+    variation: VariationSpec | None = None
+    if salt or knobs is not None or free_form:
+        variation = VariationSpec(
+            variation_salt=salt,
+            knobs=knobs,
+            free_form_layout=free_form,
+        )
+
     request = SeedGenerationRequest(
         seed=selection.seed,
         length_bars=selection.length_bars,
@@ -38,6 +61,7 @@ def build_seed_generation_request(selection: Any) -> SeedGenerationRequest | Non
         variant_id=selection.variant_id,
         use_harmony=selection.use_harmony,
         use_drums=selection.use_drums,
+        variation=variation,
     ).normalized()
     if not request.seed:
         return None
