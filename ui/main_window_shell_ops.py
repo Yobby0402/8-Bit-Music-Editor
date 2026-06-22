@@ -14,10 +14,10 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSplitter,
     QSizePolicy,
     QSlider,
     QSpinBox,
+    QSplitter,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -30,9 +30,19 @@ from ui.oscilloscope_widget import OscilloscopeWidget
 from ui.playback_settings_widget import PlaybackSettingsWidget
 from ui.property_panel_widget import PropertyPanelWidget
 from ui.score_library_widget import ScoreLibraryWidget
+from ui.sfx_editor_dialog import SfxEditorWidget
 from ui.style_params_widget import StyleParamsWidget
 from ui.toggle_switch_widget import ToggleSwitchWidget
 from ui.unified_editor_widget import UnifiedEditorWidget
+
+RIGHT_PANEL_PAGES = (
+    ("property", "Properties"),
+    ("score", "Score"),
+    ("style", "Style"),
+    ("playback", "Playback"),
+    ("bpm", "BPM"),
+    ("sfx", "SFX"),
+)
 
 
 def calculate_default_window_geometry(
@@ -72,8 +82,69 @@ def configure_splitter_pane(widget: QWidget, *, vertical_policy) -> QWidget:
     return widget
 
 
+def build_right_panel_shell(parent, pages=RIGHT_PANEL_PAGES):
+    """Build a single right-side stacked panel with compact navigation."""
+    container = QWidget(parent)
+    layout = QVBoxLayout(container)
+    layout.setContentsMargins(4, 4, 4, 4)
+    layout.setSpacing(6)
+
+    nav = QWidget(container)
+    nav_layout = QHBoxLayout(nav)
+    nav_layout.setContentsMargins(0, 0, 0, 0)
+    nav_layout.setSpacing(4)
+    button_group = QButtonGroup(container)
+    button_group.setExclusive(True)
+    buttons = {}
+    for key, label in pages:
+        button = QPushButton(label)
+        button.setCheckable(True)
+        button.setFixedHeight(28)
+        button_group.addButton(button)
+        nav_layout.addWidget(button)
+        buttons[key] = button
+    layout.addWidget(nav)
+
+    stack = QStackedWidget(container)
+    layout.addWidget(stack, 1)
+    return container, stack, buttons
+
+
 class MainWindowShellOpsMixin:
     """承载 MainWindow 的窗口壳层、布局与菜单逻辑。"""
+
+    def show_right_panel_index(self, index: int) -> None:
+        if not hasattr(self, "right_panel_stack"):
+            return
+        index = max(0, min(self.right_panel_stack.count() - 1, int(index)))
+        self.right_panel_stack.setCurrentIndex(index)
+        dock = getattr(self, "right_panel_dock", None)
+        if dock is not None:
+            dock.setVisible(True)
+            dock.raise_()
+        if hasattr(self, "right_panel_buttons"):
+            for button_index, (key, _label) in enumerate(RIGHT_PANEL_PAGES):
+                self.right_panel_buttons[key].setChecked(button_index == index)
+        if hasattr(self, "toggle_property_action") and dock is not None:
+            self.toggle_property_action.setChecked(dock.isVisible())
+        action_map = {
+            "property": "toggle_property_action",
+            "score": "toggle_score_action",
+            "style": "toggle_style_params_action",
+            "playback": "toggle_playback_settings_action",
+            "bpm": "toggle_bpm_editor_action",
+            "sfx": "toggle_sfx_editor_action",
+        }
+        for button_index, (key, _label) in enumerate(RIGHT_PANEL_PAGES):
+            action = getattr(self, action_map[key], None)
+            if action is not None:
+                action.setChecked(button_index == index and dock is not None and dock.isVisible())
+
+    def show_right_panel_page(self, key: str) -> None:
+        page_keys = [page_key for page_key, _label in RIGHT_PANEL_PAGES]
+        if key not in page_keys:
+            return
+        self.show_right_panel_index(page_keys.index(key))
 
     def _build_editor_area(self) -> QWidget:
         """构建上方统一编辑器区域。"""
@@ -316,14 +387,55 @@ class MainWindowShellOpsMixin:
         )
         self.bpm_editor_panel.tempo_events_changed.connect(self.on_tempo_events_changed)
 
-        self.tabifyDockWidget(self.property_dock, self.score_dock)
-        self.tabifyDockWidget(self.property_dock, self.style_dock)
-        self.tabifyDockWidget(self.property_dock, self.playback_settings_dock)
-        self.tabifyDockWidget(self.property_dock, self.bpm_editor_dock)
+        old_extra_docks = [
+            self.score_dock,
+            self.style_dock,
+            self.playback_settings_dock,
+            self.bpm_editor_dock,
+        ]
+        self.right_panel, self.right_panel_stack, self.right_panel_buttons = build_right_panel_shell(self)
+        for panel in (
+            self.property_panel,
+            self.score_panel,
+            self.style_params_panel,
+            self.playback_settings_panel,
+            self.bpm_editor_panel,
+        ):
+            self.right_panel_stack.addWidget(panel)
+
+        self.sfx_editor_panel = SfxEditorWidget(self)
+        self.sfx_editor_panel.insert_button.clicked.connect(self.insert_sfx_from_panel)
+        self.sfx_editor_panel.ai_generate_button.clicked.disconnect()
+        self.sfx_editor_panel.ai_generate_button.clicked.connect(
+            lambda: self._request_sfx_ai_generation(self.sfx_editor_panel)
+        )
+        self.right_panel_stack.addWidget(self.sfx_editor_panel)
+
+        for index, (key, _label) in enumerate(RIGHT_PANEL_PAGES):
+            button = self.right_panel_buttons[key]
+            button.clicked.connect(
+                lambda _checked=False, page_index=index: self.show_right_panel_index(page_index)
+            )
+        self.right_panel_buttons["property"].setChecked(True)
+        self.right_panel_stack.setCurrentIndex(0)
+
+        self.property_dock.setWindowTitle("Right Panel")
+        self.property_dock.setWidget(self.right_panel)
+        self.property_dock.setMinimumWidth(360)
+        self.property_dock.setVisible(True)
+        for dock in old_extra_docks:
+            self.removeDockWidget(dock)
+            dock.setVisible(False)
+
+        self.right_panel_dock = self.property_dock
+        self.score_dock = self.right_panel_dock
+        self.style_dock = self.right_panel_dock
+        self.playback_settings_dock = self.right_panel_dock
+        self.bpm_editor_dock = self.right_panel_dock
 
         self._right_dock_width = resolve_locked_dock_width(
-            self.property_dock.width(),
-            self.property_dock.minimumWidth(),
+            self.right_panel_dock.width(),
+            self.right_panel_dock.minimumWidth(),
         )
         for dock in self._tracked_right_docks():
             if dock is not None:
@@ -451,6 +563,15 @@ class MainWindowShellOpsMixin:
             checkable=True,
             checked=False,
         )
+        self.toggle_sfx_editor_action = self._add_action(
+            view_menu,
+            "SFX Editor(&X)",
+            lambda visible: self.show_right_panel_page("sfx")
+            if visible
+            else self.right_panel_dock.setVisible(False),
+            checkable=True,
+            checked=False,
+        )
 
         edit_menu = menubar.addMenu("编辑(&E)")
         self.undo_action = self._add_action(
@@ -487,7 +608,7 @@ class MainWindowShellOpsMixin:
         self._add_action(menubar, "生成(&G)", self.generate_music_from_seed)
 
         sfx_menu = menubar.addMenu("SFX(&X)")
-        self._add_action(sfx_menu, "SFX editor...", self.show_sfx_editor)
+        self._add_action(sfx_menu, "Open SFX panel", self.show_sfx_editor)
         sfx_menu.addSeparator()
         self._add_action(sfx_menu, "Coin pickup", self.insert_coin_sfx)
         self._add_action(sfx_menu, "Jump", self.insert_jump_sfx)

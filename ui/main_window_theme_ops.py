@@ -93,9 +93,7 @@ class MainWindowThemeOpsMixin:
     def _tracked_right_docks(self):
         """返回需要同步宽度的右侧 Dock。"""
         return (
-            getattr(self, "property_dock", None),
-            getattr(self, "score_dock", None),
-            getattr(self, "style_dock", None),
+            getattr(self, "right_panel_dock", None) or getattr(self, "property_dock", None),
         )
 
     def eventFilter(self, obj, event):

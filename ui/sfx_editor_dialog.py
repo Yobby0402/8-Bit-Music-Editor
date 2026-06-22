@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 from core.models import ADSRParams, WaveformType
@@ -51,13 +52,12 @@ def _number_item(value: float | int) -> QTableWidgetItem:
     return item
 
 
-class SfxEditorDialog(QDialog):
+class SfxEditorWidget(QWidget):
     """Collect and edit an SFX spec before insertion."""
 
     def __init__(self, parent=None, *, start_beat: float = 0.0):
         super().__init__(parent)
-        self.setWindowTitle("SFX editor")
-        self.setMinimumWidth(860)
+        self.setMinimumWidth(320)
         self._spec = build_sfx_spec("coin")
         self._ai_thread = None
 
@@ -114,10 +114,8 @@ class SfxEditorDialog(QDialog):
         note_buttons.addStretch()
         layout.addLayout(note_buttons)
 
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
+        self.insert_button = QPushButton("Insert SFX")
+        layout.addWidget(self.insert_button)
 
         self._load_spec(self._spec)
 
@@ -226,4 +224,32 @@ class SfxEditorDialog(QDialog):
         )
 
 
-__all__ = ["SfxEditorDialog"]
+class SfxEditorDialog(QDialog):
+    """Dialog wrapper kept for compatibility with older call sites."""
+
+    def __init__(self, parent=None, *, start_beat: float = 0.0):
+        super().__init__(parent)
+        self.setWindowTitle("SFX editor")
+        self.setMinimumWidth(860)
+        layout = QVBoxLayout(self)
+        self.editor = SfxEditorWidget(self, start_beat=start_beat)
+        layout.addWidget(self.editor)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        self.preset_combo = self.editor.preset_combo
+        self.auto_preview_checkbox = self.editor.auto_preview_checkbox
+        self.note_table = self.editor.note_table
+        self.ai_generate_button = self.editor.ai_generate_button
+
+    def __getattr__(self, name: str):
+        editor = self.__dict__.get("editor")
+        if editor is not None and hasattr(editor, name):
+            return getattr(editor, name)
+        raise AttributeError(name)
+
+
+__all__ = ["SfxEditorDialog", "SfxEditorWidget"]

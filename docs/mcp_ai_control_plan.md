@@ -63,7 +63,10 @@ Initial presets:
 Current UI:
 
 - The SFX menu exposes all presets.
-- The SFX editor dialog can choose a preset, insertion beat, and auto-preview.
+- The right-side panel is now the unified entry for Properties, Score, Style,
+  Playback, BPM, and SFX pages.
+- The SFX editor lives in the right-side stacked panel and can choose a preset,
+  insertion beat, and auto-preview.
 - The SFX editor dialog can edit note-level pitch, start beat, duration,
   velocity, waveform, duty cycle, and ADSR values before insertion.
 - The SFX editor dialog can ask the configured local OpenAI-compatible model to

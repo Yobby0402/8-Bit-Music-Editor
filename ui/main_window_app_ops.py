@@ -4,8 +4,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QAction, QMessageBox, QSpinBox
@@ -315,12 +315,21 @@ class MainWindowAppOpsMixin:
         super().keyPressEvent(event)
 
     def toggle_property_panel(self, visible: bool):
+        if hasattr(self, "show_right_panel_page"):
+            if visible:
+                self.show_right_panel_page("property")
+            elif hasattr(self, "right_panel_dock"):
+                self.right_panel_dock.setVisible(False)
+            return
         """切换属性面板显示。"""
         self.property_dock.setVisible(visible)
         if visible and hasattr(self, "toggle_score_action"):
             self.toggle_score_action.setChecked(self.score_dock.isVisible())
 
     def _focus_property_panel(self):
+        if hasattr(self, "show_right_panel_page"):
+            self.show_right_panel_page("property")
+            return
         """确保属性面板可见并置前。"""
         if not hasattr(self, "property_dock"):
             return
@@ -334,6 +343,12 @@ class MainWindowAppOpsMixin:
             pass
 
     def toggle_score_panel(self, visible: bool):
+        if hasattr(self, "show_right_panel_page"):
+            if visible:
+                self.show_right_panel_page("score")
+            elif hasattr(self, "right_panel_dock"):
+                self.right_panel_dock.setVisible(False)
+            return
         """切换乐谱面板显示。"""
         if not hasattr(self, "score_dock"):
             return
@@ -342,16 +357,34 @@ class MainWindowAppOpsMixin:
             self.toggle_property_action.setChecked(self.property_dock.isVisible())
 
     def toggle_style_params_panel(self, visible: bool):
+        if hasattr(self, "show_right_panel_page"):
+            if visible:
+                self.show_right_panel_page("style")
+            elif hasattr(self, "right_panel_dock"):
+                self.right_panel_dock.setVisible(False)
+            return
         """切换风格参数面板显示。"""
         if hasattr(self, "style_dock"):
             self.style_dock.setVisible(visible)
 
     def toggle_playback_settings_panel(self, visible: bool):
+        if hasattr(self, "show_right_panel_page"):
+            if visible:
+                self.show_right_panel_page("playback")
+            elif hasattr(self, "right_panel_dock"):
+                self.right_panel_dock.setVisible(False)
+            return
         """切换播放设置面板显示。"""
         if hasattr(self, "playback_settings_dock"):
             self.playback_settings_dock.setVisible(visible)
 
     def toggle_bpm_editor_panel(self, visible: bool):
+        if hasattr(self, "show_right_panel_page"):
+            if visible:
+                self.show_right_panel_page("bpm")
+            elif hasattr(self, "right_panel_dock"):
+                self.right_panel_dock.setVisible(False)
+            return
         """切换 BPM 编辑器面板显示。"""
         if hasattr(self, "bpm_editor_dock"):
             self.bpm_editor_dock.setVisible(visible)

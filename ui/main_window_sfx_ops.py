@@ -10,7 +10,7 @@ from core.sfx_ai_service import build_sfx_generation_messages, extract_json_obje
 from core.sfx_generator import SfxKind, sfx_spec_from_dict, sfx_spec_to_dict
 from ui.background_tasks import LlmHttpThread
 from ui.settings_manager import get_settings_manager
-from ui.sfx_editor_dialog import SfxEditorDialog
+from ui.sfx_editor_dialog import SfxEditorWidget
 
 
 def resolve_sfx_insert_beat(window) -> float:
@@ -63,22 +63,24 @@ class MainWindowSfxOpsMixin:
         self.statusBar().showMessage(result.message)
 
     def show_sfx_editor(self) -> None:
-        dialog = SfxEditorDialog(self, start_beat=resolve_sfx_insert_beat(self))
-        dialog.ai_generate_button.clicked.disconnect()
-        dialog.ai_generate_button.clicked.connect(lambda: self._request_sfx_ai_generation(dialog))
-        accepted = dialog.exec_() == SfxEditorDialog.Accepted
-        self._cleanup_sfx_llm_thread()
-        if not accepted:
+        if hasattr(self, "show_right_panel_page"):
+            self.show_right_panel_page("sfx")
+        if hasattr(self, "sfx_editor_panel"):
+            self.sfx_editor_panel.start_beat_spin.setValue(resolve_sfx_insert_beat(self))
+
+    def insert_sfx_from_panel(self) -> None:
+        if not hasattr(self, "sfx_editor_panel"):
             return
+        panel = self.sfx_editor_panel
         try:
-            spec = dialog.spec()
+            spec = panel.spec()
         except ValueError as exc:
             self.statusBar().showMessage(str(exc))
             return
         self._insert_sfx_spec_at(
             sfx_spec_to_dict(spec),
-            dialog.start_beat(),
-            auto_preview=dialog.auto_preview(),
+            panel.start_beat(),
+            auto_preview=panel.auto_preview(),
         )
 
     def _insert_sfx_spec_at(
@@ -105,7 +107,7 @@ class MainWindowSfxOpsMixin:
         self.refresh_ui(preserve_selection=True, force_full_refresh=True)
         self.statusBar().showMessage(result.message)
 
-    def _request_sfx_ai_generation(self, dialog: SfxEditorDialog) -> None:
+    def _request_sfx_ai_generation(self, dialog: SfxEditorWidget) -> None:
         sm = get_settings_manager()
         if not sm.is_ai_enabled():
             QMessageBox.information(self, "SFX AI", "Enable local AI in Settings first.")
@@ -142,7 +144,7 @@ class MainWindowSfxOpsMixin:
         thread.finished.connect(self._on_sfx_ai_thread_finished, type=Qt.QueuedConnection)
         thread.start()
 
-    def _on_sfx_ai_success(self, dialog: SfxEditorDialog, text: str) -> None:
+    def _on_sfx_ai_success(self, dialog: SfxEditorWidget, text: str) -> None:
         try:
             spec = sfx_spec_from_dict(extract_json_object(text))
         except Exception as exc:
@@ -152,7 +154,7 @@ class MainWindowSfxOpsMixin:
         dialog.set_ai_busy(False)
         self.statusBar().showMessage(f"Generated SFX spec: {spec.label}")
 
-    def _on_sfx_ai_failed(self, dialog: SfxEditorDialog, err: object) -> None:
+    def _on_sfx_ai_failed(self, dialog: SfxEditorWidget, err: object) -> None:
         dialog.show_ai_error(f"SFX AI request failed: {err}")
 
     def _on_sfx_ai_thread_finished(self) -> None:
