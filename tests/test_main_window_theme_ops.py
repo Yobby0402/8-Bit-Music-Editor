@@ -4,6 +4,7 @@ from ui.main_window_theme_ops import (
     has_significant_size_change,
     sync_locked_dock_width,
 )
+from ui.settings_manager import SettingsManager
 from ui.theme import theme_manager
 
 
@@ -62,10 +63,10 @@ def test_sync_locked_dock_width_updates_all_docks():
     result = sync_locked_dock_width((first, None, second), 320, 360)
 
     assert result == 360
-    assert first.minimum_width == 360
-    assert first.maximum_width == 360
-    assert second.minimum_width == 360
-    assert second.maximum_width == 360
+    assert first.minimum_width is None
+    assert first.maximum_width is None
+    assert second.minimum_width is None
+    assert second.maximum_width is None
 
 
 def test_sync_locked_dock_width_ignores_invalid_or_same_width():
@@ -87,6 +88,30 @@ def test_has_significant_size_change_respects_threshold():
 
     assert has_significant_size_change(current_size, similar_size) is False
     assert has_significant_size_change(current_size, changed_size) is True
+
+
+def test_default_playhead_refresh_targets_sixty_fps():
+    assert SettingsManager.DEFAULT_SETTINGS["playhead_refresh_interval_ms"] == 16
+
+
+def test_playhead_refresh_fps_converts_to_timer_interval():
+    manager = SettingsManager.__new__(SettingsManager)
+    manager.settings = SettingsManager.DEFAULT_SETTINGS.copy()
+    saved_values = []
+
+    def fake_set(key, value):
+        manager.settings[key] = value
+        saved_values.append((key, value))
+
+    manager.set = fake_set
+
+    assert manager.get_playhead_refresh_fps() == 60
+
+    manager.set_playhead_refresh_fps(30)
+
+    assert manager.get_playhead_refresh_interval() == 33
+    assert manager.get_playhead_refresh_fps() == 30
+    assert saved_values[-1] == ("playhead_refresh_interval_ms", 33)
 
 
 class FakeThemeWindow(MainWindowThemeOpsMixin):

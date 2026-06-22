@@ -5,6 +5,7 @@
 import time
 
 from PyQt5.QtCore import QThread, QTimer
+from PyQt5.QtWidgets import QStyle
 
 from core.tempo_map import has_variable_tempo
 from ui.background_tasks import PlaybackPrepareWorker
@@ -43,7 +44,8 @@ class MainWindowPlaybackOpsMixin:
         """统一更新播放按钮文本和提示。"""
         if not hasattr(self, "play_stop_button"):
             return
-        self.play_stop_button.setText("⏸" if is_playing else "▶")
+        icon_name = QStyle.SP_MediaPause if is_playing else QStyle.SP_MediaPlay
+        self.play_stop_button.setIcon(self.style().standardIcon(icon_name))
         self.play_stop_button.setToolTip("暂停" if is_playing else "播放")
 
     def _set_oscilloscope_playing(self, is_playing: bool):
@@ -70,6 +72,27 @@ class MainWindowPlaybackOpsMixin:
         """Toggle lightweight UI state while playback is being prepared."""
         if hasattr(self, "play_stop_button"):
             self.play_stop_button.setEnabled(not preparing)
+
+    def _get_current_playback_time(self) -> float:
+        """Return the UI playhead time that matches the active audio buffer."""
+        if self.playback_start_time is None:
+            return float(getattr(self.sequence_widget, "playhead_time", 0.0))
+
+        elapsed_time = time.time() - self.playback_start_time
+        actual_playback_time = self.playback_start_offset + elapsed_time
+
+        project = self.sequencer.project
+        original_bpm = getattr(project, "original_bpm", None) or project.bpm
+        current_bpm = project.bpm
+        uses_tempo_map = has_variable_tempo(getattr(project, "bpm_segments", []))
+        if (
+            not uses_tempo_map
+            and original_bpm > 0
+            and current_bpm > 0
+            and original_bpm != current_bpm
+        ):
+            return actual_playback_time / (original_bpm / current_bpm)
+        return actual_playback_time
 
     def _cleanup_playback_prepare_task(self, thread: QThread):
         """Release references after a playback prepare request completes."""
@@ -155,7 +178,13 @@ class MainWindowPlaybackOpsMixin:
         if request_id != getattr(self, "_playback_prepare_request_id", 0):
             return
 
-        if plan is None or not self.sequencer.start_prepared_playback(plan):
+        try:
+            playback_started = False if plan is None else self.sequencer.start_prepared_playback(plan)
+        except Exception as exc:
+            self._on_playback_prepare_failed(request_id, exc)
+            return
+
+        if not playback_started:
             self.playback_start_time = None
             self.playback_start_offset = start_time
             self._set_preview_enabled(True)
@@ -186,7 +215,7 @@ class MainWindowPlaybackOpsMixin:
         self._finish_playback_prepare_profile(request_id, outcome="failed")
 
     def toggle_play_stop(self):
-        """切换播放/停止状态（合并播放和暂停）。"""
+        """切换播放/停止状态。"""
         if self.sequencer.playback_state.is_playing or self._has_pending_playback_prepare():
             self.stop()
         else:
@@ -213,7 +242,15 @@ class MainWindowPlaybackOpsMixin:
         if not self.sequencer.playback_state.is_playing or self._has_pending_playback_prepare():
             return
 
-        self.sequencer.stop()
+        current_time = self._get_current_playback_time()
+        self.sequencer.pause()
+        self.sequencer.playback_state.current_time = current_time
+        self.sequence_widget.set_playhead_time(current_time)
+        if hasattr(self.sequence_widget, "progress_bar"):
+            self.sequence_widget.progress_bar.set_current_time(current_time)
+        self.playback_start_time = None
+        self.playback_start_offset = current_time
+        self._set_preview_enabled(True)
         self.statusBar().showMessage("已暂停")
         self._set_oscilloscope_playing(False)
         self._set_play_button_state(False)
@@ -241,45 +278,26 @@ class MainWindowPlaybackOpsMixin:
         self._set_oscilloscope_playing(False)
 
     def on_playback_volume_ratios_changed(self, ratios: dict):
-        """播放音量占比改变（实时生效，无需重新生成音频）。"""
+        """播放音量占比改变。"""
         self.sequencer.playback_volume_ratios = ratios
 
         if self.sequencer.playback_state.is_playing:
-            has_zero_volume = any(ratio <= 0.001 for ratio in ratios.values())
-            if has_zero_volume:
-                self._update_playback_volumes_realtime()
-            else:
-                self._retarget_playback_restart_timer(self._update_playback_volumes_realtime, 50)
+            self._retarget_playback_restart_timer(
+                self._restart_playback_from_current_position,
+                self._playback_settings_restart_delay,
+            )
         else:
             self.statusBar().showMessage("播放音量占比已更新")
 
     def _update_playback_volumes_realtime(self):
-        """实时更新播放音量（通过 Channel，无需重新生成音频）。"""
+        """Apply playback-volume changes through the single-buffer restart path."""
         if not self.sequencer.playback_state.is_playing or self._has_pending_playback_prepare():
             return
 
-        volume_scale = getattr(self.sequencer, "current_volume_scale", 1.0)
-        playback_enabled = getattr(self.sequencer, "playback_enabled_tracks", {})
-
-        for track in self.sequencer.project.tracks:
-            track_id = id(track)
-            is_enabled = playback_enabled.get(track_id, track.enabled) if playback_enabled else track.enabled
-
-            if not is_enabled:
-                self.sequencer.audio_engine.set_track_volume(track_id, 0.0, track.volume)
-            else:
-                volume_ratio = (
-                    self.sequencer.playback_volume_ratios.get(track_id, 1.0)
-                    if self.sequencer.playback_volume_ratios
-                    else 1.0
-                )
-                self.sequencer.audio_engine.set_track_volume(
-                    track_id,
-                    volume_ratio * volume_scale,
-                    track.volume,
-                )
-
-        self.statusBar().showMessage("播放音量已实时更新")
+        self._retarget_playback_restart_timer(
+            self._restart_playback_from_current_position,
+            self._playback_settings_restart_delay,
+        )
 
     def on_playback_track_selection_changed(self, enabled_tracks: dict):
         """播放设置面板音轨勾选状态改变。"""
@@ -288,13 +306,11 @@ class MainWindowPlaybackOpsMixin:
         self.sequencer.playback_enabled_tracks = enabled_tracks
 
         if self.sequencer.playback_state.is_playing:
-            for track in self.sequencer.project.tracks:
-                track_id = id(track)
-                is_enabled = enabled_tracks.get(track_id, track.enabled)
-                self.sequencer.audio_engine.set_track_enabled(track_id, is_enabled)
-
-            self._update_playback_volumes_realtime()
-            self.statusBar().showMessage("播放音轨启用状态已实时更新")
+            self._retarget_playback_restart_timer(
+                self._restart_playback_from_current_position,
+                self._playback_settings_restart_delay,
+            )
+            self.statusBar().showMessage("播放音轨启用状态已更新，正在重新准备播放")
         else:
             self.statusBar().showMessage("播放音轨启用状态已更新")
 
@@ -303,11 +319,7 @@ class MainWindowPlaybackOpsMixin:
         if not self.sequencer.playback_state.is_playing:
             return
 
-        current_time = self.sequencer.playback_state.current_time
-        if self.playback_start_time:
-            elapsed = time.time() - self.playback_start_time
-            current_time = self.playback_start_offset + elapsed
-
+        current_time = self._get_current_playback_time()
         QTimer.singleShot(0, lambda: self._do_restart_playback(current_time))
 
     def _do_restart_playback(self, current_time: float):
@@ -362,9 +374,6 @@ class MainWindowPlaybackOpsMixin:
     def update_playback_status(self):
         """更新播放状态和播放头。"""
         if self.sequencer.playback_state.is_playing and self.playback_start_time:
-            elapsed_time = time.time() - self.playback_start_time
-            actual_playback_time = self.playback_start_offset + elapsed_time
-
             project = self.sequencer.project
             original_bpm = getattr(project, "original_bpm", None) or project.bpm
             current_bpm = project.bpm
@@ -377,10 +386,9 @@ class MainWindowPlaybackOpsMixin:
                 and original_bpm != current_bpm
             ):
                 bpm_ratio = original_bpm / current_bpm
-                current_time = actual_playback_time / bpm_ratio
             else:
-                current_time = actual_playback_time
                 bpm_ratio = 1.0
+            current_time = self._get_current_playback_time()
 
             should_update_playhead = True
             if hasattr(self.sequence_widget, "progress_bar"):

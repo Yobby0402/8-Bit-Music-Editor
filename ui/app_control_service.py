@@ -204,6 +204,24 @@ class QtAppBridgeProxy(AppControlBridge):
     def generate_sfx_spec(self, kind="coin") -> AppCommandResult:
         return self._call_on_main_thread("generate_sfx_spec", kind)
 
+    def generate_music_spec(
+        self,
+        *,
+        style: str = "epic",
+        length_bars: int = 8,
+        bpm: float | None = None,
+        key: str = "C",
+        intensity: float = 0.85,
+    ) -> AppCommandResult:
+        return self._call_on_main_thread(
+            "generate_music_spec",
+            style=style,
+            length_bars=length_bars,
+            bpm=bpm,
+            key=key,
+            intensity=intensity,
+        )
+
     def insert_sfx(
         self,
         kind="coin",
@@ -233,6 +251,22 @@ class QtAppBridgeProxy(AppControlBridge):
     ) -> AppCommandResult:
         return self._call_on_main_thread(
             "insert_sfx_spec",
+            spec_payload,
+            start_beat=start_beat,
+            dry_run=dry_run,
+            auto_preview=auto_preview,
+        )
+
+    def insert_music_spec(
+        self,
+        spec_payload: dict[str, Any],
+        *,
+        start_beat: float = 0.0,
+        dry_run: bool = False,
+        auto_preview: bool = False,
+    ) -> AppCommandResult:
+        return self._call_on_main_thread(
+            "insert_music_spec",
             spec_payload,
             start_beat=start_beat,
             dry_run=dry_run,

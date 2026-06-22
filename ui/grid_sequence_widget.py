@@ -1012,6 +1012,7 @@ class GridSequenceWidget(QWidget):
         # 播放头
         self.playhead_time = 0.0  # 当前播放时间（秒）
         self.playhead_item = None  # 播放头图形项
+        self._last_playhead_pixel = None
         
         # 播放线拖动状态
         self.is_dragging_playhead = False  # 是否正在拖动播放线
@@ -1062,50 +1063,74 @@ class GridSequenceWidget(QWidget):
         
         # 音轨选择控制按钮
         track_selection_layout = QHBoxLayout()
-        track_selection_layout.setContentsMargins(0, 0, 0, 0)
-        track_selection_layout.setSpacing(6)
+        track_selection_layout.setContentsMargins(4, 2, 4, 2)
+        track_selection_layout.setSpacing(4)
         
         theme = theme_manager.current_theme
         button_small_style = theme.get_style("button_small")
+
+        def configure_track_bar_button(button, text: str, tooltip: str, width: int) -> None:
+            button.setText(text)
+            button.setToolTip(tooltip)
+            button.setStyleSheet(button_small_style)
+            button.setFixedHeight(26)
+            button.setMinimumWidth(width)
+            button.setMaximumWidth(width)
+
+        def add_track_bar_separator() -> None:
+            separator = QFrame()
+            separator.setFrameShape(QFrame.VLine)
+            separator.setFrameShadow(QFrame.Sunken)
+            separator.setFixedHeight(22)
+            track_selection_layout.addWidget(separator)
         
         # 添加音轨按钮（放在最左侧）
         self.add_track_button = QPushButton("添加音轨")
-        self.add_track_button.setStyleSheet(button_small_style)
+        configure_track_bar_button(self.add_track_button, "+ 音轨", "添加新音轨", 76)
         track_selection_layout.addWidget(self.add_track_button)
         
         # 删除选中音轨按钮
         self.delete_track_button = QPushButton("删除音轨")
-        self.delete_track_button.setStyleSheet(button_small_style)
-        self.delete_track_button.setToolTip("删除当前选中的音轨")
+        configure_track_bar_button(self.delete_track_button, "删除", "删除当前选中的音轨", 68)
         self.delete_track_button.clicked.connect(self.on_delete_track_clicked)
         track_selection_layout.addWidget(self.delete_track_button)
         
         # 示波器音轨选择按钮
         self.render_waveform_button = QPushButton("渲染音轨选择")
-        self.render_waveform_button.setStyleSheet(button_small_style)
-        self.render_waveform_button.setToolTip("选择要在示波器视图中渲染的音轨（最多3个）")
+        configure_track_bar_button(
+            self.render_waveform_button,
+            "示波器",
+            "选择要在示波器视图中渲染的音轨",
+            68,
+        )
         self.render_waveform_button.clicked.connect(self.on_render_waveform_clicked)
         track_selection_layout.addWidget(self.render_waveform_button)
         
-        track_selection_layout.addSpacing(8)
+        track_selection_layout.addSpacing(4)
+        add_track_bar_separator()
+        track_selection_layout.addSpacing(4)
         
         select_all_btn = QPushButton("☑")  # 全选图标
-        select_all_btn.setToolTip("全选")
-        select_all_btn.setStyleSheet(button_small_style)
+        configure_track_bar_button(select_all_btn, "全选", "选择所有音轨", 48)
         select_all_btn.clicked.connect(self.select_all_tracks)
+        self.select_all_tracks_button = select_all_btn
         track_selection_layout.addWidget(select_all_btn)
         
         deselect_all_btn = QPushButton("☐")  # 全不选图标
-        deselect_all_btn.setToolTip("全不选")
-        deselect_all_btn.setStyleSheet(button_small_style)
+        configure_track_bar_button(deselect_all_btn, "清空", "清空音轨选择", 54)
         deselect_all_btn.clicked.connect(self.deselect_all_tracks)
+        self.deselect_all_tracks_button = deselect_all_btn
         track_selection_layout.addWidget(deselect_all_btn)
         
         invert_selection_btn = QPushButton("↻")  # 反选图标
-        invert_selection_btn.setToolTip("反选")
-        invert_selection_btn.setStyleSheet(button_small_style)
+        configure_track_bar_button(invert_selection_btn, "反选", "反选音轨", 58)
         invert_selection_btn.clicked.connect(self.invert_track_selection)
+        self.invert_track_selection_button = invert_selection_btn
         track_selection_layout.addWidget(invert_selection_btn)
+
+        track_selection_layout.addSpacing(4)
+        add_track_bar_separator()
+        track_selection_layout.addSpacing(4)
         
         # ========== 进度条（放在全选按钮那一行）==========
         from ui.progress_bar_widget import ProgressBarWidget
@@ -2622,6 +2647,7 @@ class GridSequenceWidget(QWidget):
                 self._incremental_update_tracks_and_blocks()
                 
                 # 更新播放头
+                self._last_playhead_pixel = None
                 self.draw_playhead()
                 
                 # 恢复播放头时间
@@ -2667,6 +2693,7 @@ class GridSequenceWidget(QWidget):
         stage_started_at = perf_counter()
         # 清除所有引用
         self.playhead_item = None
+        self._last_playhead_pixel = None
         self.grid_items.clear()
         self.track_label_items.clear()
         self.track_line_items.clear()
@@ -3789,15 +3816,18 @@ class GridSequenceWidget(QWidget):
     def set_playhead_time(self, time: float):
         """设置播放头时间"""
         self.playhead_time = time
-        self.draw_playhead()
-        
-        # 更新进度条的播放线位置
-        if hasattr(self, 'progress_bar'):
-            self.progress_bar.set_playhead_time(time)
-        
-        # 如果播放头超出视图范围，自动滚动
         beat_position = self._seconds_to_beats(self.playhead_time)
         x = beat_position * self.pixels_per_beat  # 从0开始，因为左侧固定区域已经处理了标签和勾选框
+        playhead_pixel = int(x)
+        pixel_changed = playhead_pixel != self._last_playhead_pixel
+
+        if pixel_changed:
+            self._last_playhead_pixel = playhead_pixel
+            self.draw_playhead()
+
+        # 更新进度条的播放线位置。ProgressBarWidget 内部会跳过重复的文本/滑块更新。
+        if hasattr(self, 'progress_bar'):
+            self.progress_bar.set_playhead_time(time)
 
         if self._is_playing():
             if self._get_playback_view_mode() == "fixed_playhead":

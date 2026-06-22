@@ -34,16 +34,6 @@ class PlaybackState:
 
 
 @dataclass(frozen=True)
-class PreparedTrackAudio:
-    """Thread-safe prepared track audio."""
-
-    track: Track
-    audio_buffer: np.ndarray
-    track_id: int
-    initial_volume: float
-
-
-@dataclass(frozen=True)
 class PreparedPlaybackPlan:
     """Prepared playback data that can be started later on the UI thread."""
 
@@ -51,7 +41,8 @@ class PreparedPlaybackPlan:
     end_time: float
     loop: bool
     volume_scale: float
-    tracks: list[PreparedTrackAudio]
+    audio_buffer: np.ndarray
+    track_count: int
 
 
 def prepare_playback_plan(
@@ -73,44 +64,36 @@ def prepare_playback_plan(
         return None
 
     render_engine = AudioEngine(sample_rate, initialize_mixer=False)
-    track_audio_list = render_engine.generate_track_audio_list(
+    playback_enabled = playback_enabled_tracks or {}
+    if playback_enabled:
+        track_count = len(
+            [
+                track for track in project.tracks
+                if playback_enabled.get(id(track), track.enabled)
+            ]
+        )
+    else:
+        track_count = len([track for track in project.tracks if track.enabled])
+
+    audio_data = render_engine.generate_project_audio(
         project,
-        start_time,
-        end_time,
+        start_time=start_time,
+        end_time=end_time,
+        playback_volume_ratios=playback_volume_ratios,
         playback_enabled_tracks=playback_enabled_tracks,
     )
-
-    valid_tracks = [
-        (track, audio_data, track_id)
-        for track, audio_data, track_id in track_audio_list
-        if len(audio_data) > 0
-    ]
-    if not valid_tracks:
+    if len(audio_data) <= 0:
         return None
 
-    max_duration = max(
-        len(audio_data) / float(sample_rate)
-        for _, audio_data, _ in valid_tracks
-    )
-    volume_scale = 1.0 / len(valid_tracks) if len(valid_tracks) > 1 else 1.0
-    volume_ratios = playback_volume_ratios or {}
-
-    prepared_tracks = [
-        PreparedTrackAudio(
-            track=track,
-            audio_buffer=render_engine.pack_audio_for_playback(audio_data),
-            track_id=track_id,
-            initial_volume=volume_ratios.get(track_id, 1.0) * volume_scale,
-        )
-        for track, audio_data, track_id in valid_tracks
-    ]
+    duration = len(audio_data) / float(sample_rate)
 
     return PreparedPlaybackPlan(
         start_time=start_time,
-        end_time=start_time + max_duration,
+        end_time=start_time + duration,
         loop=loop,
-        volume_scale=volume_scale,
-        tracks=prepared_tracks,
+        volume_scale=1.0,
+        audio_buffer=render_engine.pack_audio_for_playback(audio_data),
+        track_count=track_count,
     )
 
 
@@ -138,7 +121,7 @@ class Sequencer:
         self.project = project
         self.audio_engine = AudioEngine(sample_rate, initialize_mixer=initialize_audio)
         self.playback_state = PlaybackState()
-        self._current_sound = None
+        self._current_sounds = []
         
         # 命令历史管理器
         self.command_history = CommandHistory(max_history=100)
@@ -392,30 +375,32 @@ class Sequencer:
         )
 
     def start_prepared_playback(self, plan: PreparedPlaybackPlan) -> bool:
-        """Start playback from a previously rendered plan."""
+        """Start playback from a previously rendered single mixed buffer."""
         self.stop()
 
         self._current_sounds = []
-        channels_to_start = []
         self.current_volume_scale = plan.volume_scale
         self.playback_state.end_time = plan.end_time
 
-        for prepared_track in plan.tracks:
+        try:
             sound, channel = self.audio_engine.prepare_packed_track_audio(
-                prepared_track.audio_buffer,
-                volume=prepared_track.initial_volume,
-                track_id=prepared_track.track_id,
+                plan.audio_buffer,
+                volume=1.0,
             )
-            if sound and channel:
-                self._current_sounds.append(sound)
-                channels_to_start.append((channel, sound, -1 if plan.loop else 0))
-
-        if not channels_to_start:
+        except Exception:
+            self.stop()
+            return False
+        if not sound or not channel:
+            self.stop()
             return False
 
-        for channel, sound, loops in channels_to_start:
-            channel.play(sound, loops=loops)
+        try:
+            channel.play(sound, loops=-1 if plan.loop else 0)
+        except Exception:
+            self.stop()
+            return False
 
+        self._current_sounds.append(sound)
         self.playback_state.is_playing = True
         self.playback_state.current_time = plan.start_time
         return True

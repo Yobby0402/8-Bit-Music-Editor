@@ -10,6 +10,14 @@ from typing import Any, Callable, Literal
 
 from core.command import AddNoteCommand, AddTrackCommand, BatchCommand, ModifyTrackCommand
 from core.models import Project, Track, TrackRole, TrackType
+from core.music_spec import (
+    build_insert_music_command,
+    music_spec_from_dict,
+    music_spec_to_dict,
+)
+from core.music_spec import (
+    generate_music_spec as build_generated_music_spec,
+)
 from core.project_service import export_audio_document, export_audio_range_document
 from core.sequencer import Sequencer
 from core.sfx_generator import (
@@ -29,13 +37,16 @@ AppCommandName = Literal[
     "get_operation_log",
     "list_sfx_presets",
     "generate_sfx_spec",
+    "generate_music_spec",
     "insert_sfx",
     "insert_sfx_spec",
+    "insert_music_spec",
     "preview_playback",
     "stop_playback",
     "export_audio",
     "export_audio_range",
     "undo",
+    "app_control_error",
 ]
 
 
@@ -267,6 +278,31 @@ class AppControlBridge:
             )
         )
 
+    def generate_music_spec(
+        self,
+        *,
+        style: str = "epic",
+        length_bars: int = 8,
+        bpm: float | None = None,
+        key: str = "C",
+        intensity: float = 0.85,
+    ) -> AppCommandResult:
+        spec = build_generated_music_spec(
+            style=style,
+            length_bars=length_bars,
+            bpm=bpm,
+            key=key,
+            intensity=intensity,
+        )
+        return self._record_result(
+            AppCommandResult(
+                command="generate_music_spec",
+                ok=True,
+                message=f"Generated music spec: {spec.label}",
+                data=music_spec_to_dict(spec),
+            )
+        )
+
     def insert_sfx(
         self,
         kind: SfxKind = "coin",
@@ -358,6 +394,57 @@ class AppControlBridge:
             )
 
         return self._run_locked("insert_sfx_spec", run)
+
+    def insert_music_spec(
+        self,
+        spec_payload: dict[str, Any],
+        *,
+        start_beat: float = 0.0,
+        dry_run: bool = False,
+        auto_preview: bool = False,
+    ) -> AppCommandResult:
+        def run() -> AppCommandResult:
+            try:
+                spec = music_spec_from_dict(spec_payload)
+                command, summary = build_insert_music_command(
+                    self.sequencer,
+                    spec,
+                    start_beat,
+                )
+            except (TypeError, ValueError) as exc:
+                return AppCommandResult(
+                    command="insert_music_spec",
+                    ok=False,
+                    message=f"Invalid music spec: {exc}",
+                    data={},
+                )
+
+            if dry_run:
+                return AppCommandResult(
+                    command="insert_music_spec",
+                    ok=True,
+                    message=f"Would insert music spec: {summary['label']}",
+                    data=summary,
+                    changed=False,
+                    dry_run=True,
+                )
+
+            self.sequencer.command_history.execute_command(command)
+            if auto_preview:
+                preview = self.preview_playback(
+                    start_beat=summary["start_beat"],
+                    end_beat=summary["start_beat"] + summary["duration_beats"],
+                )
+                summary["preview_result"] = preview.data
+            return AppCommandResult(
+                command="insert_music_spec",
+                ok=True,
+                message=f"Inserted music spec: {summary['label']}",
+                data=summary,
+                changed=True,
+            )
+
+        return self._run_locked("insert_music_spec", run)
 
     def stop_playback(self) -> AppCommandResult:
         def run() -> AppCommandResult:
@@ -609,6 +696,7 @@ __all__ = [
     "AppCommandResult",
     "AppControlBridge",
     "build_insert_sfx_command",
+    "build_insert_music_command",
     "summarize_playback_context",
     "sfx_spec_to_dict",
     "summarize_project",

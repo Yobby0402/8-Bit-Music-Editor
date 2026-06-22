@@ -75,6 +75,18 @@ Restart Claude Desktop after changing MCP config.
 
 ## Typical AI workflow
 
+Music generation:
+
+1. Start the 8bit PyQt app.
+2. Ask the AI host to call `eightbit_generate_music` with `style="epic"`.
+3. Ask it to call `eightbit_insert_music_spec` with `dry_run=true`.
+4. If the summary looks right, call `eightbit_insert_music_spec` with
+   `dry_run=false` and optionally `auto_preview=true`.
+5. Call `eightbit_preview_playback` or export the full project with
+   `eightbit_export_audio`.
+
+Sound-effect generation:
+
 1. Start the 8bit PyQt app.
 2. Ask the AI host to call `eightbit_insert_sfx_spec` with a dry run first.
 3. If the summary looks right, call `eightbit_insert_sfx_spec` with
@@ -111,9 +123,59 @@ Example custom SFX spec:
 }
 ```
 
+Example epic music generation call:
+
+```json
+{
+  "style": "epic",
+  "length_bars": 8,
+  "bpm": 132,
+  "key": "C",
+  "intensity": 0.9
+}
+```
+
+Example music insertion call using the generated `data` as `spec`:
+
+```json
+{
+  "spec": {
+    "kind": "epic_music",
+    "label": "Epic 8bit Theme",
+    "bpm": 132,
+    "time_signature": [4, 4],
+    "structure": [
+      {"name": "intro", "start_beat": 0.0, "duration_beats": 8.0},
+      {"name": "theme", "start_beat": 8.0, "duration_beats": 24.0}
+    ],
+    "tracks": [
+      {
+        "name": "Lead",
+        "track_type": "note",
+        "role": "melody",
+        "notes": [
+          {"pitch": 72, "start_beat": 0.0, "duration_beats": 1.0, "velocity": 118, "waveform": "square"}
+        ]
+      },
+      {
+        "name": "Drums",
+        "track_type": "drum",
+        "drum_events": [
+          {"drum_type": "kick", "start_beat": 0.0, "duration_beats": 0.25, "velocity": 120}
+        ]
+      }
+    ]
+  },
+  "start_beat": 0.0,
+  "dry_run": true,
+  "auto_preview": false
+}
+```
+
 ## Safety behavior
 
 - Mutating SFX insert tools support `dry_run`.
+- Mutating music insert tools support `dry_run`.
 - Export tools require absolute file paths.
 - Export tools refuse overwrites unless `overwrite=true`.
 - When commands reach the running PyQt app, real file export asks the user for

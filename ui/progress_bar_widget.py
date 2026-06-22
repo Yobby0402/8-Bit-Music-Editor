@@ -25,6 +25,8 @@ class ProgressBarWidget(QWidget):
         self.current_time = 0.0
         self.total_time = 0.0  # 总时长（秒）
         self.is_dragging = False
+        self._current_time_text = "00:00"
+        self._total_time_text = "00:00"
         
         self.init_ui()
     
@@ -36,7 +38,7 @@ class ProgressBarWidget(QWidget):
         self.setLayout(layout)
         
         # 当前时间标签
-        self.current_time_label = QLabel("00:00")
+        self.current_time_label = QLabel(self._current_time_text)
         self.current_time_label.setMinimumWidth(50)
         self.current_time_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.current_time_label)
@@ -53,7 +55,7 @@ class ProgressBarWidget(QWidget):
         layout.addWidget(self.progress_slider, 1)  # 可拉伸
         
         # 总时间标签
-        self.total_time_label = QLabel("00:00")
+        self.total_time_label = QLabel(self._total_time_text)
         self.total_time_label.setMinimumWidth(50)
         self.total_time_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.total_time_label)
@@ -86,6 +88,20 @@ class ProgressBarWidget(QWidget):
         minutes = int(seconds // 60)
         secs = int(seconds % 60)
         return f"{minutes:02d}:{secs:02d}"
+
+    def _set_current_time_text(self, seconds: float) -> None:
+        text = self.format_time(seconds)
+        if text == self._current_time_text:
+            return
+        self._current_time_text = text
+        self.current_time_label.setText(text)
+
+    def _set_total_time_text(self, seconds: float) -> None:
+        text = self.format_time(seconds)
+        if text == self._total_time_text:
+            return
+        self._total_time_text = text
+        self.total_time_label.setText(text)
     
     def set_project(self, project):
         """Set the project used for beat/second conversion."""
@@ -131,7 +147,7 @@ class ProgressBarWidget(QWidget):
             
             # 更新当前时间显示
             self.current_time = new_time
-            self.current_time_label.setText(self.format_time(new_time))
+            self._set_current_time_text(new_time)
             
             # 发送信号（仅在拖动时发送，避免与播放更新冲突）
             if self.is_dragging:
@@ -145,7 +161,7 @@ class ProgressBarWidget(QWidget):
         if self.total_time > 0:
             new_time = (value / 1000.0) * self.total_time
             self.current_time = new_time
-            self.current_time_label.setText(self.format_time(new_time))
+            self._set_current_time_text(new_time)
             self.playhead_time_changed.emit(new_time)
     
     def set_bpm(self, bpm: float):
@@ -156,31 +172,33 @@ class ProgressBarWidget(QWidget):
         """设置当前时间（从外部调用，如播放时）"""
         if not self.is_dragging:  # 只有在不拖动时才更新
             self.current_time = time
-            self.current_time_label.setText(self.format_time(time))
+            self._set_current_time_text(time)
             
             # 更新滑块位置
             if self.total_time > 0:
                 value = int((time / self.total_time) * 1000)
-                self.progress_slider.blockSignals(True)
-                self.progress_slider.setValue(value)
-                self.progress_slider.blockSignals(False)
+                if value != self.progress_slider.value():
+                    self.progress_slider.blockSignals(True)
+                    self.progress_slider.setValue(value)
+                    self.progress_slider.blockSignals(False)
     
     def set_total_time(self, time: float):
         """设置总时长"""
         self.total_time = max(0.0, time)
-        self.total_time_label.setText(self.format_time(self.total_time))
+        self._set_total_time_text(self.total_time)
         
         # 如果总时长改变，更新当前时间显示
         if self.current_time > self.total_time:
             self.current_time = self.total_time
-            self.current_time_label.setText(self.format_time(self.current_time))
+            self._set_current_time_text(self.current_time)
         
         # 更新滑块位置
         if self.total_time > 0:
             value = int((self.current_time / self.total_time) * 1000)
-            self.progress_slider.blockSignals(True)
-            self.progress_slider.setValue(value)
-            self.progress_slider.blockSignals(False)
+            if value != self.progress_slider.value():
+                self.progress_slider.blockSignals(True)
+                self.progress_slider.setValue(value)
+                self.progress_slider.blockSignals(False)
     
     def set_playhead_time(self, time: float):
         """设置播放线时间（从外部调用，兼容TimelineWidget接口）"""

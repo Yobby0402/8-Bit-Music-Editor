@@ -108,6 +108,7 @@ class OscilloscopeWidget(QWidget):
         
         # 当前播放时间（由外部设置）
         self.current_time = 0.0
+        self._last_render_x = None
         # 内部时间（用于动画），后面会简化为直接使用current_time，避免双重时间轴导致抖动
         self.internal_time = 0.0
         self.is_playing = False
@@ -249,8 +250,15 @@ class OscilloscopeWidget(QWidget):
                 return
             # 大于等于 0.2 秒则认为是用户跳转或重新播放，允许时间重置
 
+        render_x = int(current_time * self.waveform_speed)
+        if self.is_playing and render_x == self._last_render_x:
+            self.current_time = current_time
+            self.internal_time = current_time
+            return
+
         self.current_time = current_time
         self.internal_time = current_time
+        self._last_render_x = render_x
         # 每次时间更新时触发一次重绘，由外部的播放定时器控制刷新频率，
         # 避免内部再叠加高频刷新造成闪烁。
         self.update()
@@ -258,6 +266,7 @@ class OscilloscopeWidget(QWidget):
     def set_playing(self, is_playing: bool):
         """设置播放状态"""
         self.is_playing = is_playing
+        self._last_render_x = None
         # 即使不播放也触发一次重绘，显示当前状态
         self.update()
     

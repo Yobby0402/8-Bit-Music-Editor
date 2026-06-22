@@ -36,6 +36,15 @@ def dispatch_bridge_request(
         return bridge.list_sfx_presets()
     if path == "/sfx-spec":
         return bridge.generate_sfx_spec(str(payload.get("kind", "coin")))
+    if path == "/music-spec":
+        bpm_payload = payload.get("bpm")
+        return bridge.generate_music_spec(
+            style=str(payload.get("style", "epic")),
+            length_bars=int(payload.get("length_bars", 8)),
+            bpm=None if bpm_payload is None else float(bpm_payload),
+            key=str(payload.get("key", "C")),
+            intensity=float(payload.get("intensity", 0.85)),
+        )
     if path == "/insert-sfx":
         return bridge.insert_sfx(
             str(payload.get("kind", "coin")),
@@ -48,6 +57,16 @@ def dispatch_bridge_request(
         if not isinstance(spec_payload, dict):
             spec_payload = {}
         return bridge.insert_sfx_spec(
+            spec_payload,
+            start_beat=float(payload.get("start_beat", 0.0)),
+            dry_run=bool(payload.get("dry_run", False)),
+            auto_preview=bool(payload.get("auto_preview", False)),
+        )
+    if path == "/insert-music-spec":
+        spec_payload = payload.get("spec", {})
+        if not isinstance(spec_payload, dict):
+            spec_payload = {}
+        return bridge.insert_music_spec(
             spec_payload,
             start_beat=float(payload.get("start_beat", 0.0)),
             dry_run=bool(payload.get("dry_run", False)),
@@ -143,8 +162,17 @@ class AppControlHttpServer:
                 return
 
             def _handle_json(self, payload: JsonDict | None) -> None:
-                result = dispatch_bridge_request(owner.bridge_factory(), self.path, payload)
-                status = 200 if result.ok else 404
+                try:
+                    result = dispatch_bridge_request(owner.bridge_factory(), self.path, payload)
+                    status = 200 if result.ok else 404
+                except Exception as exc:
+                    result = AppCommandResult(
+                        command="app_control_error",
+                        ok=False,
+                        message=f"App-control request failed: {exc}",
+                        data={"path": self.path},
+                    )
+                    status = 500
                 self._send_json(status, result_to_json_dict(result))
 
             def _send_json(self, status: int, payload: JsonDict) -> None:

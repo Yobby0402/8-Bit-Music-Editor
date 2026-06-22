@@ -1,4 +1,5 @@
 import json
+import urllib.error
 import urllib.request
 
 from core.app_control_bridge import AppControlBridge
@@ -64,6 +65,36 @@ def test_dispatch_bridge_request_supports_custom_sfx_spec_dry_run():
     assert bridge.sequencer.project.tracks == []
 
 
+def test_dispatch_bridge_request_supports_music_spec_generation_and_insert():
+    bridge = AppControlBridge(Sequencer(initialize_audio=False))
+
+    generated = dispatch_bridge_request(
+        bridge,
+        "/music-spec",
+        {"style": "epic", "length_bars": 4, "bpm": 132},
+    )
+    dry_run = dispatch_bridge_request(
+        bridge,
+        "/insert-music-spec",
+        {"spec": generated.data, "start_beat": 4.0, "dry_run": True},
+    )
+    inserted = dispatch_bridge_request(
+        bridge,
+        "/insert-music-spec",
+        {"spec": generated.data, "start_beat": 4.0},
+    )
+
+    assert generated.ok is True
+    assert generated.command == "generate_music_spec"
+    assert generated.data["bpm"] == 132
+    assert dry_run.ok is True
+    assert dry_run.command == "insert_music_spec"
+    assert dry_run.dry_run is True
+    assert inserted.ok is True
+    assert inserted.changed is True
+    assert len(bridge.sequencer.project.tracks) == 4
+
+
 def test_dispatch_bridge_request_rejects_unknown_path():
     result = dispatch_bridge_request(AppControlBridge(Sequencer(initialize_audio=False)), "/nope")
 
@@ -94,6 +125,37 @@ def test_http_server_handles_project_and_insert_requests():
         assert inserted["ok"] is True
         assert inserted["changed"] is True
         assert len(bridge.sequencer.project.tracks) == 1
+    finally:
+        server.stop()
+
+
+def test_http_server_returns_json_error_when_bridge_request_raises():
+    class BrokenBridge:
+        def get_project_state(self):
+            raise RuntimeError("audio failed")
+
+    server = AppControlHttpServer(lambda: BrokenBridge(), port=0)
+    server.start()
+    try:
+        base = f"http://127.0.0.1:{server.bound_port}"
+        try:
+            urllib.request.urlopen(f"{base}/project", timeout=5)
+        except urllib.error.HTTPError as exc:
+            error = json.loads(exc.read().decode("utf-8"))
+        else:
+            raise AssertionError("Expected HTTPError")
+
+        assert error["ok"] is False
+        assert error["command"] == "app_control_error"
+        assert error["data"]["path"] == "/project"
+
+        try:
+            urllib.request.urlopen(f"{base}/project", timeout=5)
+        except urllib.error.HTTPError as exc:
+            second_error = json.loads(exc.read().decode("utf-8"))
+        else:
+            raise AssertionError("Expected HTTPError")
+        assert second_error["command"] == "app_control_error"
     finally:
         server.stop()
 

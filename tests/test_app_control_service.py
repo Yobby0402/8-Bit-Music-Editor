@@ -87,6 +87,35 @@ def test_qt_app_bridge_proxy_runs_command_through_qt_event_loop():
     assert owner.messages == ["Inserted SFX: Coin pickup"]
 
 
+def test_qt_app_bridge_proxy_inserts_music_spec_and_refreshes_ui():
+    app = _app()
+    owner = Owner()
+    proxy = QtAppBridgeProxy(lambda: AppControlBridge(owner.sequencer), owner)
+    spec = AppControlBridge(owner.sequencer).generate_music_spec(length_bars=4, bpm=132).data
+    result_holder = {}
+
+    def worker():
+        result_holder["result"] = proxy.insert_music_spec(spec, start_beat=0.0)
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+
+    def poll():
+        if thread.is_alive():
+            QTimer.singleShot(10, poll)
+        else:
+            app.quit()
+
+    QTimer.singleShot(10, poll)
+    app.exec_()
+    thread.join(timeout=2)
+
+    assert result_holder["result"].ok is True
+    assert len(owner.sequencer.project.tracks) == 4
+    assert owner.refresh_calls == [(True, True)]
+    assert owner.messages == ["Inserted music spec: Epic 8bit Theme"]
+
+
 def test_qt_app_bridge_proxy_can_cancel_file_export_without_bridge_call(tmp_path):
     owner = Owner()
     calls = []

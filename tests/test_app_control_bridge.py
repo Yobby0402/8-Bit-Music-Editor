@@ -7,7 +7,7 @@ from core.app_control_bridge import (
     summarize_playback_context,
     summarize_project,
 )
-from core.models import TrackRole
+from core.models import TrackRole, TrackType
 from core.sequencer import Sequencer
 
 
@@ -61,6 +61,23 @@ def test_generate_sfx_spec_result_is_json_ready():
     assert data["notes"][0]["waveform"] == "square"
     assert data["notes"][0]["adsr"]["attack"] >= 0.0
     assert data["filter_params"]["enabled"] is True
+
+
+def test_generate_music_spec_result_is_json_ready_multi_track():
+    result = AppControlBridge(Sequencer(initialize_audio=False)).generate_music_spec(
+        style="epic",
+        length_bars=8,
+        bpm=136,
+        key="C",
+    )
+
+    assert result.ok is True
+    assert result.command == "generate_music_spec"
+    assert result.data["kind"] == "epic_music"
+    assert result.data["bpm"] == 136
+    assert len(result.data["tracks"]) == 4
+    assert result.data["tracks"][0]["role"] == "melody"
+    assert result.data["tracks"][3]["track_type"] == "drum"
 
 
 def test_insert_sfx_dry_run_does_not_mutate_project():
@@ -159,6 +176,54 @@ def test_insert_sfx_spec_can_request_auto_preview():
     assert result.ok is True
     assert sequencer.play_calls == [(1.0, False, 1.25)]
     assert result.data["preview_result"]["start_beat"] == 2.0
+
+
+def test_insert_music_spec_supports_dry_run_mutation_and_undo():
+    sequencer = Sequencer(initialize_audio=False)
+    sequencer.project.bpm = 120
+    bridge = AppControlBridge(sequencer)
+    spec = bridge.generate_music_spec(style="epic", length_bars=4, bpm=132).data
+
+    dry_run = bridge.insert_music_spec(spec, start_beat=8.0, dry_run=True)
+
+    assert dry_run.ok is True
+    assert dry_run.dry_run is True
+    assert dry_run.changed is False
+    assert sequencer.project.tracks == []
+
+    inserted = bridge.insert_music_spec(spec, start_beat=8.0)
+
+    assert inserted.ok is True
+    assert inserted.changed is True
+    assert inserted.data["track_count"] == 4
+    assert inserted.data["note_count"] > 0
+    assert inserted.data["drum_event_count"] > 0
+    assert sequencer.project.bpm == 132
+    assert [track.role for track in sequencer.project.tracks[:3]] == [
+        TrackRole.MELODY,
+        TrackRole.BASS,
+        TrackRole.HARMONY,
+    ]
+    assert sequencer.project.tracks[3].track_type == TrackType.DRUM_TRACK
+    assert sequencer.project.tracks[0].notes[0].start_tick == sequencer.project.beats_to_ticks(8.0)
+
+    undo = bridge.undo()
+
+    assert undo.ok is True
+    assert sequencer.project.tracks == []
+    assert sequencer.project.bpm == 120
+
+
+def test_insert_music_spec_can_request_auto_preview():
+    sequencer = RecordingSequencer()
+    bridge = AppControlBridge(sequencer)
+    spec = bridge.generate_music_spec(style="epic", length_bars=4, bpm=120).data
+
+    result = bridge.insert_music_spec(spec, start_beat=4.0, auto_preview=True)
+
+    assert result.ok is True
+    assert sequencer.play_calls == [(2.0, False, 10.0)]
+    assert result.data["preview_result"]["end_beat"] == 20.0
 
 
 def test_operation_log_records_recent_commands():

@@ -39,19 +39,22 @@ class LocalhostAppClient:
 
     def request(self, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
-        if payload is None:
-            with urllib.request.urlopen(url, timeout=self.timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
+        try:
+            if payload is None:
+                with urllib.request.urlopen(url, timeout=self.timeout) as response:
+                    return json.loads(response.read().decode("utf-8"))
 
-        body = json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(
-            url,
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
+            body = json.dumps(payload).encode("utf-8")
+            request = urllib.request.Request(
+                url,
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            return json.loads(exc.read().decode("utf-8"))
 
 
 class McpCommandRouter:
@@ -102,6 +105,31 @@ class McpCommandRouter:
     def generate_sfx_spec(self, kind: SfxKind = "coin") -> dict[str, Any]:
         return self._app_or_fallback("/sfx-spec", {"kind": kind}, "generate_sfx_spec", kind)
 
+    def generate_music_spec(
+        self,
+        style: str = "epic",
+        length_bars: int = 8,
+        bpm: float | None = None,
+        key: str = "C",
+        intensity: float = 0.85,
+    ) -> dict[str, Any]:
+        return self._app_or_fallback(
+            "/music-spec",
+            {
+                "style": style,
+                "length_bars": length_bars,
+                "bpm": bpm,
+                "key": key,
+                "intensity": intensity,
+            },
+            "generate_music_spec",
+            style=style,
+            length_bars=length_bars,
+            bpm=bpm,
+            key=key,
+            intensity=intensity,
+        )
+
     def insert_sfx(
         self,
         kind: SfxKind = "coin",
@@ -140,6 +168,28 @@ class McpCommandRouter:
                 "auto_preview": auto_preview,
             },
             "insert_sfx_spec",
+            spec,
+            start_beat=start_beat,
+            dry_run=dry_run,
+            auto_preview=auto_preview,
+        )
+
+    def insert_music_spec(
+        self,
+        spec: dict[str, Any],
+        start_beat: float = 0.0,
+        dry_run: bool = False,
+        auto_preview: bool = False,
+    ) -> dict[str, Any]:
+        return self._app_or_fallback(
+            "/insert-music-spec",
+            {
+                "spec": spec,
+                "start_beat": start_beat,
+                "dry_run": dry_run,
+                "auto_preview": auto_preview,
+            },
+            "insert_music_spec",
             spec,
             start_beat=start_beat,
             dry_run=dry_run,
@@ -257,6 +307,23 @@ def register_mcp_handlers(
         return router.generate_sfx_spec(kind)
 
     @mcp.tool()
+    def eightbit_generate_music(
+        style: str = "epic",
+        length_bars: int = 8,
+        bpm: float | None = None,
+        key: str = "C",
+        intensity: float = 0.85,
+    ) -> dict[str, Any]:
+        """Return a structured multi-track 8bit music spec without mutating the project."""
+        return router.generate_music_spec(
+            style=style,
+            length_bars=length_bars,
+            bpm=bpm,
+            key=key,
+            intensity=intensity,
+        )
+
+    @mcp.tool()
     def eightbit_insert_sfx(
         kind: SfxKind = "coin",
         start_beat: float = 0.0,
@@ -280,6 +347,21 @@ def register_mcp_handlers(
     ) -> dict[str, Any]:
         """Insert a validated custom 8bit SFX spec into the current project."""
         return router.insert_sfx_spec(
+            spec,
+            start_beat=start_beat,
+            dry_run=dry_run,
+            auto_preview=auto_preview,
+        )
+
+    @mcp.tool()
+    def eightbit_insert_music_spec(
+        spec: dict[str, Any],
+        start_beat: float = 0.0,
+        dry_run: bool = False,
+        auto_preview: bool = False,
+    ) -> dict[str, Any]:
+        """Insert a validated multi-track 8bit music spec into the current project."""
+        return router.insert_music_spec(
             spec,
             start_beat=start_beat,
             dry_run=dry_run,

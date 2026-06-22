@@ -16,6 +16,8 @@ from .tempo_map import beat_span_to_seconds, has_variable_tempo
 from .track_events import DrumType
 from .waveform_generator import WaveformGenerator
 
+MIXER_BUFFER_SIZE = 2048
+
 
 class AudioEngine:
     """音频引擎"""
@@ -41,7 +43,7 @@ class AudioEngine:
                 frequency=sample_rate,
                 size=-16,  # 16位
                 channels=2,  # 立体声
-                buffer=512
+                buffer=MIXER_BUFFER_SIZE
             )
             # 预分配足够的Channel（pygame默认只有8个，我们需要更多）
             pygame.mixer.set_num_channels(32)

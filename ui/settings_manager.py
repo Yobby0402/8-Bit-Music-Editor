@@ -21,7 +21,7 @@ class SettingsManager(QObject):
         "stack_overlapped_notes": False,  # 是否将重叠音符以"蜘蛛纸牌"方式垂直摞起
         "show_velocity_opacity": False,  # 是否根据力度显示音符透明度（力度越小越透明）
         # 播放相关
-        "playhead_refresh_interval_ms": 50,    # 播放线刷新间隔（毫秒），默认50ms≈20FPS
+        "playhead_refresh_interval_ms": 16,    # 播放线刷新间隔（毫秒），默认16ms≈60FPS
         "playback_view_mode": "moving_playhead",  # 播放显示模式：播放线移动 / 播放线固定
         # 显示与主题相关设置
         "ui_background_color": "#FAFAFA",   # 全局背景色
@@ -139,8 +139,18 @@ class SettingsManager(QObject):
 
     def set_playhead_refresh_interval(self, interval_ms: int):
         """设置播放线刷新间隔（毫秒）"""
-        interval_ms = max(10, min(200, int(interval_ms)))  # 限制在10-200ms之间
+        interval_ms = max(16, min(200, int(interval_ms)))  # 限制在16-200ms之间
         self.set("playhead_refresh_interval_ms", interval_ms)
+
+    def get_playhead_refresh_fps(self) -> int:
+        """获取播放线刷新帧率（FPS）"""
+        interval_ms = max(1, self.get_playhead_refresh_interval())
+        return max(5, min(60, int(round(1000.0 / interval_ms))))
+
+    def set_playhead_refresh_fps(self, fps: int):
+        """设置播放线刷新帧率（FPS）"""
+        fps = max(5, min(60, int(fps)))
+        self.set_playhead_refresh_interval(round(1000.0 / fps))
 
     def get_playback_view_mode(self) -> str:
         """获取播放显示模式。"""

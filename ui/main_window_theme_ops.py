@@ -67,15 +67,10 @@ def sync_locked_dock_width(
     current_width: int | None,
     new_width: int,
 ) -> int | None:
-    """同步右侧多个 Dock 的锁定宽度。"""
+    """Record the current right dock width without fighting manual resizing."""
     if new_width <= 0 or new_width == current_width:
         return current_width
 
-    for dock in docks:
-        if dock is None:
-            continue
-        dock.setMinimumWidth(new_width)
-        dock.setMaximumWidth(new_width)
     return new_width
 
 

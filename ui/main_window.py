@@ -2,13 +2,13 @@
 Main window module.
 """
 
-from PyQt5.QtCore import QSettings, QTimer
+from PyQt5.QtCore import QSettings, Qt, QTimer
 from PyQt5.QtWidgets import QMainWindow
 
 from core.score_library import ScoreLibrary
 from core.sequencer import Sequencer
-from ui.main_window_app_ops import MainWindowAppOpsMixin
 from ui.app_control_service import AppControlService
+from ui.main_window_app_ops import MainWindowAppOpsMixin
 from ui.main_window_editor_ops import MainWindowEditorOpsMixin
 from ui.main_window_note_entry_ops import MainWindowNoteEntryOpsMixin
 from ui.main_window_playback_ops import MainWindowPlaybackOpsMixin
@@ -16,8 +16,8 @@ from ui.main_window_project_ops import MainWindowProjectOpsMixin
 from ui.main_window_refresh_ops import MainWindowRefreshOpsMixin
 from ui.main_window_score_ops import MainWindowScoreOpsMixin
 from ui.main_window_seed_ops import MainWindowSeedOpsMixin
-from ui.main_window_shell_ops import MainWindowShellOpsMixin
 from ui.main_window_sfx_ops import MainWindowSfxOpsMixin
+from ui.main_window_shell_ops import MainWindowShellOpsMixin
 from ui.main_window_theme_ops import MainWindowThemeOpsMixin
 from ui.main_window_view_ops import MainWindowViewOpsMixin
 from ui.settings_manager import get_settings_manager
@@ -72,6 +72,7 @@ class MainWindow(
         self.setup_shortcuts()
 
         self.update_timer = QTimer()
+        self.update_timer.setTimerType(Qt.PreciseTimer)
         self.update_timer.timeout.connect(self.update_playback_status)
         self.update_timer.start(self.settings_manager.get_playhead_refresh_interval())
 

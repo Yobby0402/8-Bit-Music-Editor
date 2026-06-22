@@ -45,6 +45,22 @@ def test_sfx_editor_dialog_exposes_selected_options():
         app.processEvents()
 
 
+def test_sfx_editor_dialog_uses_compact_detail_grid():
+    app = _app()
+    dialog = SfxEditorDialog(start_beat=0.0)
+
+    try:
+        assert dialog.note_detail_grid.rowCount() == 5
+        assert dialog.note_detail_grid.columnCount() == 4
+        assert dialog.note_table.alternatingRowColors() is True
+        assert dialog.ai_generate_button.property("primaryAction") is True
+        assert dialog.insert_button.property("primaryAction") is True
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        app.processEvents()
+
+
 def test_sfx_editor_dialog_returns_edited_note_spec():
     app = _app()
     dialog = SfxEditorDialog(start_beat=0.0)
@@ -58,6 +74,39 @@ def test_sfx_editor_dialog_returns_edited_note_spec():
         assert spec.notes[0].pitch == 90
         assert spec.notes[0].waveform.value == "triangle"
         assert spec.notes[0].adsr.attack == 0.01
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        app.processEvents()
+
+
+def test_sfx_editor_detail_controls_write_back_to_note_spec():
+    app = _app()
+    dialog = SfxEditorDialog(start_beat=0.0)
+
+    try:
+        dialog.note_table.selectRow(0)
+        dialog.pitch_spin.setValue(91)
+        dialog.note_start_spin.setValue(0.125)
+        dialog.note_duration_spin.setValue(0.25)
+        dialog.velocity_spin.setValue(99)
+        dialog.waveform_combo.setCurrentIndex(dialog.waveform_combo.findData("noise"))
+        dialog.attack_spin.setValue(0.02)
+        dialog.decay_spin.setValue(0.03)
+        dialog.sustain_spin.setValue(0.4)
+        dialog.release_spin.setValue(0.05)
+
+        spec = dialog.spec()
+
+        assert spec.notes[0].pitch == 91
+        assert spec.notes[0].start_beat == pytest.approx(0.125)
+        assert spec.notes[0].duration_beats == pytest.approx(0.25)
+        assert spec.notes[0].velocity == 99
+        assert spec.notes[0].waveform.value == "noise"
+        assert spec.notes[0].adsr.attack == pytest.approx(0.02)
+        assert spec.notes[0].adsr.decay == pytest.approx(0.03)
+        assert spec.notes[0].adsr.sustain == pytest.approx(0.4)
+        assert spec.notes[0].adsr.release == pytest.approx(0.05)
     finally:
         dialog.close()
         dialog.deleteLater()

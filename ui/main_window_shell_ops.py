@@ -4,21 +4,24 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import QSize, Qt, QTimer
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
     QButtonGroup,
     QDockWidget,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSlider,
     QSpinBox,
     QSplitter,
     QStackedWidget,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -29,6 +32,7 @@ from ui.grid_sequence_widget import GridSequenceWidget
 from ui.oscilloscope_widget import OscilloscopeWidget
 from ui.playback_settings_widget import PlaybackSettingsWidget
 from ui.property_panel_widget import PropertyPanelWidget
+from ui.right_panel_style import right_panel_stylesheet
 from ui.score_library_widget import ScoreLibraryWidget
 from ui.sfx_editor_dialog import SfxEditorWidget
 from ui.style_params_widget import StyleParamsWidget
@@ -36,13 +40,26 @@ from ui.toggle_switch_widget import ToggleSwitchWidget
 from ui.unified_editor_widget import UnifiedEditorWidget
 
 RIGHT_PANEL_PAGES = (
-    ("property", "Properties"),
-    ("score", "Score"),
-    ("style", "Style"),
-    ("playback", "Playback"),
+    ("property", "属性"),
+    ("score", "乐谱"),
+    ("style", "风格"),
+    ("playback", "播放"),
     ("bpm", "BPM"),
-    ("sfx", "SFX"),
+    ("sfx", "音效"),
 )
+
+RIGHT_PANEL_NAV_LABELS = {
+    "property": "属性",
+    "score": "乐谱",
+    "style": "风格",
+    "playback": "播放",
+    "bpm": "BPM",
+    "sfx": "音效",
+}
+
+RIGHT_PANEL_MIN_WIDTH = 560
+MAIN_WINDOW_MIN_WIDTH = 1120
+MAIN_WINDOW_MIN_HEIGHT = 650
 
 
 def calculate_default_window_geometry(
@@ -62,7 +79,7 @@ def calculate_default_window_geometry(
 
 def resolve_locked_dock_width(current_width: int, minimum_width: int) -> int:
     """解析右侧 Dock 需要锁定的宽度。"""
-    return current_width if current_width > 0 else minimum_width
+    return max(current_width, minimum_width) if current_width > 0 else minimum_width
 
 
 def calculate_default_center_splitter_sizes(total_height: int) -> tuple[int, int]:
@@ -83,31 +100,49 @@ def configure_splitter_pane(widget: QWidget, *, vertical_policy) -> QWidget:
 
 
 def build_right_panel_shell(parent, pages=RIGHT_PANEL_PAGES):
-    """Build a single right-side stacked panel with compact navigation."""
+    """Build a single right-side stacked panel with compact top navigation."""
     container = QWidget(parent)
+    container.setObjectName("rightPanelShell")
     layout = QVBoxLayout(container)
-    layout.setContentsMargins(4, 4, 4, 4)
-    layout.setSpacing(6)
+    layout.setContentsMargins(8, 8, 8, 8)
+    layout.setSpacing(8)
 
     nav = QWidget(container)
+    nav.setObjectName("rightPanelNav")
     nav_layout = QHBoxLayout(nav)
-    nav_layout.setContentsMargins(0, 0, 0, 0)
-    nav_layout.setSpacing(4)
+    nav_layout.setContentsMargins(3, 3, 3, 3)
+    nav_layout.setSpacing(3)
     button_group = QButtonGroup(container)
     button_group.setExclusive(True)
     buttons = {}
     for key, label in pages:
-        button = QPushButton(label)
+        button = QPushButton(RIGHT_PANEL_NAV_LABELS.get(key, label))
         button.setCheckable(True)
-        button.setFixedHeight(28)
+        button.setMinimumHeight(30)
+        button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        button.setToolTip(label)
+        button.setProperty("rightPanelNavButton", True)
         button_group.addButton(button)
         nav_layout.addWidget(button)
         buttons[key] = button
     layout.addWidget(nav)
 
     stack = QStackedWidget(container)
+    stack.setObjectName("rightPanelStack")
     layout.addWidget(stack, 1)
+    container.setStyleSheet(right_panel_stylesheet())
     return container, stack, buttons
+
+
+def wrap_right_panel_page(widget: QWidget) -> QScrollArea:
+    """Wrap a dock page so narrow right panels stay usable."""
+    scroll_area = QScrollArea()
+    scroll_area.setObjectName("rightPanelPageScroll")
+    scroll_area.setWidgetResizable(True)
+    scroll_area.setFrameShape(QFrame.NoFrame)
+    scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+    scroll_area.setWidget(widget)
+    return scroll_area
 
 
 class MainWindowShellOpsMixin:
@@ -181,18 +216,22 @@ class MainWindowShellOpsMixin:
         self.playback_button_group = QButtonGroup()
         self.playback_button_group.setExclusive(True)
 
-        self.play_stop_button = QPushButton("▶")
-        self.play_stop_button.setToolTip("播放/停止")
+        self.play_stop_button = QPushButton()
+        self.play_stop_button.setToolTip("播放/暂停")
         self.play_stop_button.setCheckable(False)
-        self.play_stop_button.setFixedSize(40, 35)
+        self.play_stop_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.play_stop_button.setIconSize(QSize(18, 18))
+        self.play_stop_button.setFixedSize(44, 36)
         self.play_stop_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.play_stop_button.clicked.connect(self.toggle_play_stop)
+        self.play_stop_button.clicked.connect(self.toggle_play_pause)
         playback_control_layout.addWidget(self.play_stop_button)
 
-        self.stop_button = QPushButton("⏹")
+        self.stop_button = QPushButton()
         self.stop_button.setToolTip("停止")
         self.stop_button.setCheckable(False)
-        self.stop_button.setFixedSize(40, 35)
+        self.stop_button.setIcon(self.style().standardIcon(QStyle.SP_MediaStop))
+        self.stop_button.setIconSize(QSize(18, 18))
+        self.stop_button.setFixedSize(44, 36)
         self.stop_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.stop_button.clicked.connect(self.stop)
         playback_control_layout.addWidget(self.stop_button)
@@ -308,7 +347,7 @@ class MainWindowShellOpsMixin:
     ):
         """统一配置右侧 Dock 的宽度策略和可见性。"""
         dock.setMinimumWidth(minimum_width)
-        dock.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        dock.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         if maximum_height is not None:
             dock.setMaximumHeight(maximum_height)
         dock.setVisible(visible)
@@ -401,7 +440,7 @@ class MainWindowShellOpsMixin:
             self.playback_settings_panel,
             self.bpm_editor_panel,
         ):
-            self.right_panel_stack.addWidget(panel)
+            self.right_panel_stack.addWidget(wrap_right_panel_page(panel))
 
         self.sfx_editor_panel = SfxEditorWidget(self)
         self.sfx_editor_panel.insert_button.clicked.connect(self.insert_sfx_from_panel)
@@ -409,7 +448,7 @@ class MainWindowShellOpsMixin:
         self.sfx_editor_panel.ai_generate_button.clicked.connect(
             lambda: self._request_sfx_ai_generation(self.sfx_editor_panel)
         )
-        self.right_panel_stack.addWidget(self.sfx_editor_panel)
+        self.right_panel_stack.addWidget(wrap_right_panel_page(self.sfx_editor_panel))
 
         for index, (key, _label) in enumerate(RIGHT_PANEL_PAGES):
             button = self.right_panel_buttons[key]
@@ -419,9 +458,9 @@ class MainWindowShellOpsMixin:
         self.right_panel_buttons["property"].setChecked(True)
         self.right_panel_stack.setCurrentIndex(0)
 
-        self.property_dock.setWindowTitle("Right Panel")
+        self.property_dock.setWindowTitle("右侧面板")
         self.property_dock.setWidget(self.right_panel)
-        self.property_dock.setMinimumWidth(360)
+        self.property_dock.setMinimumWidth(RIGHT_PANEL_MIN_WIDTH)
         self.property_dock.setVisible(True)
         for dock in old_extra_docks:
             self.removeDockWidget(dock)
@@ -440,7 +479,6 @@ class MainWindowShellOpsMixin:
         for dock in self._tracked_right_docks():
             if dock is not None:
                 dock.setMinimumWidth(self._right_dock_width)
-                dock.setMaximumWidth(self._right_dock_width)
                 dock.installEventFilter(self)
 
     def init_ui(self):
@@ -452,7 +490,7 @@ class MainWindowShellOpsMixin:
         self.setGeometry(*geometry)
 
         self._initial_window_size = self.size()
-        self.setMinimumSize(800, 600)
+        self.setMinimumSize(MAIN_WINDOW_MIN_WIDTH, MAIN_WINDOW_MIN_HEIGHT)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -565,7 +603,7 @@ class MainWindowShellOpsMixin:
         )
         self.toggle_sfx_editor_action = self._add_action(
             view_menu,
-            "SFX Editor(&X)",
+            "音效编辑器(&X)",
             lambda visible: self.show_right_panel_page("sfx")
             if visible
             else self.right_panel_dock.setVisible(False),
@@ -607,19 +645,19 @@ class MainWindowShellOpsMixin:
 
         self._add_action(menubar, "生成(&G)", self.generate_music_from_seed)
 
-        sfx_menu = menubar.addMenu("SFX(&X)")
-        self._add_action(sfx_menu, "Open SFX panel", self.show_sfx_editor)
+        sfx_menu = menubar.addMenu("音效(&X)")
+        self._add_action(sfx_menu, "打开音效面板", self.show_sfx_editor)
         sfx_menu.addSeparator()
-        self._add_action(sfx_menu, "Coin pickup", self.insert_coin_sfx)
-        self._add_action(sfx_menu, "Jump", self.insert_jump_sfx)
-        self._add_action(sfx_menu, "Hit", self.insert_hit_sfx)
-        self._add_action(sfx_menu, "Power up", self.insert_power_up_sfx)
-        self._add_action(sfx_menu, "Laser", self.insert_laser_sfx)
-        self._add_action(sfx_menu, "Explosion", self.insert_explosion_sfx)
-        self._add_action(sfx_menu, "Menu select", self.insert_select_sfx)
-        self._add_action(sfx_menu, "Error beep", self.insert_error_sfx)
-        self._add_action(sfx_menu, "Door open", self.insert_door_sfx)
-        self._add_action(sfx_menu, "Heal", self.insert_heal_sfx)
+        self._add_action(sfx_menu, "吃金币", self.insert_coin_sfx)
+        self._add_action(sfx_menu, "跳跃", self.insert_jump_sfx)
+        self._add_action(sfx_menu, "受击", self.insert_hit_sfx)
+        self._add_action(sfx_menu, "强化", self.insert_power_up_sfx)
+        self._add_action(sfx_menu, "激光", self.insert_laser_sfx)
+        self._add_action(sfx_menu, "爆炸", self.insert_explosion_sfx)
+        self._add_action(sfx_menu, "菜单选择", self.insert_select_sfx)
+        self._add_action(sfx_menu, "错误提示", self.insert_error_sfx)
+        self._add_action(sfx_menu, "开门", self.insert_door_sfx)
+        self._add_action(sfx_menu, "治疗", self.insert_heal_sfx)
 
         self._add_action(menubar, "设置(&S)", self.show_settings)
 

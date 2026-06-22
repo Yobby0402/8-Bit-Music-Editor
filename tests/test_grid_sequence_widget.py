@@ -1,11 +1,21 @@
 from types import SimpleNamespace
 
 import pytest
+from PyQt5.QtWidgets import QApplication
 
 import ui.settings_manager as settings_manager_module
 from core.models import Note, Track, TrackRole, TrackType
 from ui import grid_sequence_widget as grid_widget_module
 from ui.grid_sequence_widget import GridSequenceWidget
+
+
+def _app():
+    app = QApplication.instance()
+    if app is not None and not isinstance(app, QApplication):
+        pytest.skip("A non-GUI QCoreApplication is already active")
+    if app is None:
+        app = QApplication([])
+    return app
 
 
 class FakePos:
@@ -368,6 +378,7 @@ class FakeGridWidget:
         self.base_pixels_per_beat = pixels_per_beat
         self.track_height_zoom = 1.0
         self.playhead_item = None
+        self._last_playhead_pixel = None
         self.playhead_time = 1.0
         self.scene = FakeScene()
         self.view = FakeView(
@@ -647,6 +658,38 @@ def test_set_playhead_time_uses_fixed_playhead_mode(monkeypatch):
     assert widget.view.center_on_calls == []
 
 
+def test_set_playhead_time_skips_same_pixel_playhead_redraw(monkeypatch):
+    monkeypatch.setattr(
+        grid_widget_module.theme_manager,
+        "_current_theme",
+        SimpleNamespace(get_color=lambda _name: "#ff0000"),
+    )
+    widget = FakeGridWidget(pixels_per_beat=40.0)
+
+    widget.set_playhead_time(1.0)
+    item = widget.playhead_item
+    widget.set_playhead_time(1.01)
+
+    assert len(widget.scene.add_line_calls) == 1
+    assert item.set_line_calls == 0
+
+
+def test_set_playhead_time_redraws_when_pixel_changes(monkeypatch):
+    monkeypatch.setattr(
+        grid_widget_module.theme_manager,
+        "_current_theme",
+        SimpleNamespace(get_color=lambda _name: "#ff0000"),
+    )
+    widget = FakeGridWidget(pixels_per_beat=40.0)
+
+    widget.set_playhead_time(1.0)
+    item = widget.playhead_item
+    widget.set_playhead_time(1.05)
+
+    assert len(widget.scene.add_line_calls) == 1
+    assert item.set_line_calls == 1
+
+
 def test_scene_width_for_content_can_shrink_to_viewport_width():
     lead = Track(name="Lead", track_type=TrackType.NOTE_TRACK)
     lead.notes = [Note(pitch=60, start_time=0.0, duration=200.0)]
@@ -741,6 +784,24 @@ def test_track_line_starts_at_zero_after_left_panel_decoupling():
 
     assert line_item.line().x1() == 0.0
     assert line_item.line().x2() == 640.0
+
+
+def test_track_toolbar_uses_compact_grouped_actions():
+    app = _app()
+    widget = GridSequenceWidget()
+
+    try:
+        assert widget.add_track_button.text() == "+ 音轨"
+        assert widget.delete_track_button.text() == "删除"
+        assert widget.render_waveform_button.text() == "示波器"
+        assert widget.select_all_tracks_button.text() == "全选"
+        assert widget.deselect_all_tracks_button.text() == "清空"
+        assert widget.invert_track_selection_button.text() == "反选"
+        assert widget.add_track_button.maximumWidth() == 76
+    finally:
+        widget.close()
+        widget.deleteLater()
+        app.processEvents()
 
 
 def test_bulk_scene_update_restores_view_and_scene_state():

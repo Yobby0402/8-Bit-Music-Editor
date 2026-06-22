@@ -385,15 +385,16 @@ class SettingsDialog(QDialog):
         self.velocity_opacity_checkbox.setChecked(self.settings_manager.is_velocity_opacity_enabled())
         layout.addWidget(self.velocity_opacity_checkbox)
 
-        # 播放线刷新率（毫秒）
+        # 播放线刷新率（FPS）
         refresh_layout = QHBoxLayout()
-        refresh_label = QLabel("播放线刷新间隔 (毫秒，数值越小越流畅、但更耗性能):")
+        refresh_label = QLabel("播放线刷新率 (FPS，数值越高越流畅、但更耗性能):")
         refresh_layout.addWidget(refresh_label)
-        self.playhead_refresh_spinbox = QSpinBox()
-        self.playhead_refresh_spinbox.setRange(10, 200)
-        self.playhead_refresh_spinbox.setSingleStep(5)
-        self.playhead_refresh_spinbox.setValue(self.settings_manager.get_playhead_refresh_interval())
-        refresh_layout.addWidget(self.playhead_refresh_spinbox)
+        self.playhead_refresh_fps_spinbox = QSpinBox()
+        self.playhead_refresh_fps_spinbox.setRange(5, 60)
+        self.playhead_refresh_fps_spinbox.setSingleStep(5)
+        self.playhead_refresh_fps_spinbox.setSuffix(" FPS")
+        self.playhead_refresh_fps_spinbox.setValue(self.settings_manager.get_playhead_refresh_fps())
+        refresh_layout.addWidget(self.playhead_refresh_fps_spinbox)
         refresh_layout.addStretch()
         layout.addLayout(refresh_layout)
 
@@ -599,8 +600,8 @@ class SettingsDialog(QDialog):
             self.stack_overlapped_checkbox.setChecked(self.settings_manager.is_stack_overlapped_notes_enabled())
         if hasattr(self, "velocity_opacity_checkbox"):
             self.velocity_opacity_checkbox.setChecked(self.settings_manager.is_velocity_opacity_enabled())
-        if hasattr(self, "playhead_refresh_spinbox"):
-            self.playhead_refresh_spinbox.setValue(self.settings_manager.get_playhead_refresh_interval())
+        if hasattr(self, "playhead_refresh_fps_spinbox"):
+            self.playhead_refresh_fps_spinbox.setValue(self.settings_manager.get_playhead_refresh_fps())
         if hasattr(self, "playback_view_mode_combo"):
             current_view_mode = self.settings_manager.get_playback_view_mode()
             current_index = self.playback_view_mode_combo.findData(current_view_mode)
@@ -791,8 +792,8 @@ class SettingsDialog(QDialog):
             self.settings_manager.set_stack_overlapped_notes(self.stack_overlapped_checkbox.isChecked())
         if hasattr(self, "velocity_opacity_checkbox"):
             self.settings_manager.set_velocity_opacity_enabled(self.velocity_opacity_checkbox.isChecked())
-        if hasattr(self, "playhead_refresh_spinbox"):
-            self.settings_manager.set_playhead_refresh_interval(self.playhead_refresh_spinbox.value())
+        if hasattr(self, "playhead_refresh_fps_spinbox"):
+            self.settings_manager.set_playhead_refresh_fps(self.playhead_refresh_fps_spinbox.value())
         if hasattr(self, "playback_view_mode_combo"):
             self.settings_manager.set_playback_view_mode(self.playback_view_mode_combo.currentData())
         

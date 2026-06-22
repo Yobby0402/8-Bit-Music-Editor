@@ -65,10 +65,14 @@ Current UI:
 - The SFX menu exposes all presets.
 - The right-side panel is now the unified entry for Properties, Score, Style,
   Playback, BPM, and SFX pages.
+- The right-side panel uses a compact navigation rail and scroll-wrapped pages
+  so SFX and settings controls remain usable in the dock width.
 - The SFX editor lives in the right-side stacked panel and can choose a preset,
   insertion beat, and auto-preview.
 - The SFX editor dialog can edit note-level pitch, start beat, duration,
   velocity, waveform, duty cycle, and ADSR values before insertion.
+- The sequence area toolbar uses grouped compact track actions for add, delete,
+  oscilloscope selection, and bulk track selection.
 - The SFX editor dialog can ask the configured local OpenAI-compatible model to
   generate a structured SFX spec from a natural language prompt, then lets the
   user revise the generated notes before inserting them.
@@ -104,8 +108,10 @@ Candidate commands:
 
 - `get_project_state`
 - `generate_sfx_spec`
+- `generate_music_spec`
 - `insert_sfx`
 - `insert_sfx_spec`
+- `insert_music_spec`
 - `preview_playback`
 - `get_ui_context`
 - `stop_playback`
@@ -123,8 +129,10 @@ Current localhost endpoints:
 - `GET /project`
 - `GET /sfx-presets`
 - `POST /sfx-spec`
+- `POST /music-spec`
 - `POST /insert-sfx`
 - `POST /insert-sfx-spec`
+- `POST /insert-music-spec`
 - `GET /ui-context`
 - `GET /operation-log`
 - `POST /preview`
@@ -156,8 +164,10 @@ Initial tools:
 - `eightbit_get_operation_log`
 - `eightbit_list_sfx_presets`
 - `eightbit_generate_sfx`
+- `eightbit_generate_music`
 - `eightbit_insert_sfx`
 - `eightbit_insert_sfx_spec`
+- `eightbit_insert_music_spec`
 - `eightbit_preview_playback`
 - `eightbit_stop_playback`
 - `eightbit_export_audio`
@@ -196,7 +206,7 @@ Current app-control flow:
   only the generated SFX window, for example beat `4.0` to `4.5`.
 - Set `sfx_only=true` on `eightbit_export_audio_range` to mute non-effect
   tracks while exporting a game sound-effect asset.
-- Set `auto_preview=true` on insert tools to audition the newly inserted SFX
+- Set `auto_preview=true` on insert tools to audition the newly inserted
   range immediately in the running app.
 - Call `eightbit_get_operation_log` to inspect recent AI/app-control actions.
 
@@ -204,11 +214,14 @@ Host setup examples are in [mcp_host_setup.md](mcp_host_setup.md).
 
 ## Phase 4: AI-assisted SFX and arrangement
 
-Status: implemented for the first in-app SFX flow.
+Status: implemented for the first in-app SFX flow and first multi-track music
+spec flow.
 
 Success criteria:
 
 - AI can map natural language to a structured `SfxSpec`.
+- AI can generate or provide a structured `MusicSpec` with melody, bass,
+  harmony, drums, BPM, structure, and style parameters.
 - AI output is validated before any project mutation.
 - The user can revise, accept, reject, preview, or undo the generated result.
 
@@ -223,6 +236,70 @@ Example structured SFX payload:
     {"pitch": 91, "start_beat": 0.12, "duration_beats": 0.10},
     {"pitch": 96, "start_beat": 0.22, "duration_beats": 0.16}
   ]
+}
+```
+
+Current generated music workflow:
+
+1. Call `eightbit_generate_music` with `style="epic"`, `length_bars`, `bpm`,
+   `key`, and `intensity`.
+2. Inspect the returned multi-track spec.
+3. Call `eightbit_insert_music_spec` with `dry_run=true`.
+4. Call `eightbit_insert_music_spec` with `dry_run=false` and optionally
+   `auto_preview=true`.
+
+Example structured music payload:
+
+```json
+{
+  "spec": {
+    "kind": "epic_music",
+    "label": "Epic 8bit Theme",
+    "bpm": 132,
+    "time_signature": [4, 4],
+    "structure": [
+      {"name": "intro", "start_beat": 0.0, "duration_beats": 8.0},
+      {"name": "theme", "start_beat": 8.0, "duration_beats": 24.0}
+    ],
+    "style_params": {"style": "epic", "key": "C", "intensity": 0.85},
+    "tracks": [
+      {
+        "name": "Lead",
+        "track_type": "note",
+        "role": "melody",
+        "notes": [
+          {"pitch": 72, "start_beat": 0.0, "duration_beats": 1.0, "velocity": 118, "waveform": "square"}
+        ]
+      },
+      {
+        "name": "Bass",
+        "track_type": "note",
+        "role": "bass",
+        "notes": [
+          {"pitch": 36, "start_beat": 0.0, "duration_beats": 1.0, "velocity": 110, "waveform": "triangle"}
+        ]
+      },
+      {
+        "name": "Harmony",
+        "track_type": "note",
+        "role": "harmony",
+        "notes": [
+          {"pitch": 60, "start_beat": 0.0, "duration_beats": 4.0, "velocity": 86, "waveform": "sawtooth"}
+        ]
+      },
+      {
+        "name": "Drums",
+        "track_type": "drum",
+        "drum_events": [
+          {"drum_type": "kick", "start_beat": 0.0, "duration_beats": 0.25, "velocity": 120},
+          {"drum_type": "snare", "start_beat": 1.0, "duration_beats": 0.25, "velocity": 112}
+        ]
+      }
+    ]
+  },
+  "start_beat": 0.0,
+  "dry_run": true,
+  "auto_preview": false
 }
 ```
 
