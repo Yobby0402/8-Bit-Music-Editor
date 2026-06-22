@@ -90,6 +90,34 @@ def normalize_track_role(
     return infer_track_role(name, track_type)
 
 
+def _add_track_effects_to_dict(track: "Track", result: Dict[str, Any]) -> None:
+    """Append optional track-level effects to a serialized track dict."""
+    if track.filter_params is not None:
+        result["filter_params"] = track.filter_params.to_dict()
+    if track.delay_params is not None:
+        result["delay_params"] = track.delay_params.to_dict()
+    if track.tremolo_params is not None:
+        result["tremolo_params"] = track.tremolo_params.to_dict()
+    if track.vibrato_params is not None:
+        result["vibrato_params"] = track.vibrato_params.to_dict()
+
+
+def _track_effect_kwargs_from_dict(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Build Track constructor kwargs for optional track-level effects."""
+    from .effect_processor import DelayParams, FilterParams, TremoloParams, VibratoParams
+
+    kwargs: Dict[str, Any] = {}
+    if data.get("filter_params"):
+        kwargs["filter_params"] = FilterParams.from_dict(data["filter_params"])
+    if data.get("delay_params"):
+        kwargs["delay_params"] = DelayParams.from_dict(data["delay_params"])
+    if data.get("tremolo_params"):
+        kwargs["tremolo_params"] = TremoloParams.from_dict(data["tremolo_params"])
+    if data.get("vibrato_params"):
+        kwargs["vibrato_params"] = VibratoParams.from_dict(data["vibrato_params"])
+    return kwargs
+
+
 @dataclass
 class BPMSegment:
     """BPM段数据模型"""
@@ -435,6 +463,7 @@ class Track:
             result["drum_events"] = [event.to_dict() for event in self.drum_events]
         else:
             result["notes"] = [note.to_dict() for note in self.notes]
+        _add_track_effects_to_dict(self, result)
         return result
     
     def to_dict_sequence(self, bpm: float) -> Dict[str, Any]:
@@ -454,6 +483,7 @@ class Track:
             result["drum_events"] = [event.to_dict() for event in self.drum_events]
         else:
             result["notes"] = [note.to_dict_sequence_with_bpm(bpm) for note in self.notes]
+        _add_track_effects_to_dict(self, result)
         return result
     
     def to_dict_grid(self) -> Dict[str, Any]:
@@ -473,6 +503,7 @@ class Track:
             result["drum_events"] = [event.to_dict() for event in self.drum_events]
         else:
             result["notes"] = [note.to_dict_grid() for note in self.notes]
+        _add_track_effects_to_dict(self, result)
         return result
     
     @classmethod
@@ -503,7 +534,8 @@ class Track:
                 pan=data.get("pan", 0.0),
                 enabled=data.get("enabled", True),
                 display_height=data.get("display_height"),
-                drum_events=drum_events
+                drum_events=drum_events,
+                **_track_effect_kwargs_from_dict(data),
             )
         
         # 音符音轨：处理 notes
@@ -541,7 +573,8 @@ class Track:
             pan=data.get("pan", 0.0),
             enabled=data.get("enabled", True),
             display_height=data.get("display_height"),
-            notes=[Note.from_dict(note_data) for note_data in notes_data]
+            notes=[Note.from_dict(note_data) for note_data in notes_data],
+            **_track_effect_kwargs_from_dict(data),
         )
     
     @classmethod
@@ -576,7 +609,8 @@ class Track:
                 pan=data.get("pan", 0.0),
                 enabled=data.get("enabled", True),
                 display_height=data.get("display_height"),
-                drum_events=drum_events
+                drum_events=drum_events,
+                **_track_effect_kwargs_from_dict(data),
             )
         
         # 音符音轨：处理 notes
@@ -619,7 +653,8 @@ class Track:
             pan=data.get("pan", 0.0),
             enabled=data.get("enabled", True),
             display_height=data.get("display_height"),
-            notes=notes
+            notes=notes,
+            **_track_effect_kwargs_from_dict(data),
         )
     
     @classmethod
@@ -650,7 +685,8 @@ class Track:
                 pan=data.get("pan", 0.0),
                 enabled=data.get("enabled", True),
                 display_height=data.get("display_height"),
-                drum_events=drum_events
+                drum_events=drum_events,
+                **_track_effect_kwargs_from_dict(data),
             )
         
         # 音符音轨：处理 notes
@@ -676,7 +712,8 @@ class Track:
             pan=data.get("pan", 0.0),
             enabled=data.get("enabled", True),
             display_height=data.get("display_height"),
-            notes=notes
+            notes=notes,
+            **_track_effect_kwargs_from_dict(data),
         )
     
     def add_note(self, note: Note) -> None:

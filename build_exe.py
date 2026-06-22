@@ -1,12 +1,6 @@
-"""
-打包脚本 - 将8bit音乐制作器打包成单个exe文件
+"""Package the desktop app and the MCP stdio server as Windows executables."""
 
-使用方法:
-    python build_exe.py
-
-需要先安装PyInstaller:
-    pip install pyinstaller
-"""
+from __future__ import annotations
 
 import os
 import sys
@@ -15,55 +9,76 @@ import PyInstaller.__main__
 
 from app_info import APP_NAME
 
-# 获取项目根目录
-project_root = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
-# PyInstaller参数
-args = [
-    'main.py',                          # 主程序入口
-    f'--name={APP_NAME}',               # 生成的exe文件名
-    '--onefile',                        # 打包成单个exe文件
-    '--windowed',                       # 不显示控制台窗口（GUI应用）
-    '--clean',                          # 清理临时文件
-    '--noconfirm',                      # 覆盖输出目录而不询问
-    
-    # 隐藏导入（PyQt5相关）
-    '--hidden-import=PyQt5.QtCore',
-    '--hidden-import=PyQt5.QtGui',
-    '--hidden-import=PyQt5.QtWidgets',
-    '--hidden-import=numpy',
-    '--hidden-import=scipy',
-    '--hidden-import=scipy.io',
-    '--hidden-import=scipy.io.wavfile',
-    '--hidden-import=pygame',
-    '--hidden-import=soundfile',
-    '--hidden-import=mido',
-    '--hidden-import=mido.backends',
-    
-    # 排除不需要的模块（减小文件大小）
-    '--exclude-module=matplotlib',
-    '--exclude-module=tkinter',
-    '--exclude-module=IPython',
-    '--exclude-module=jupyter',
-    
-    # 图标（如果有的话，可以取消注释）
-    # '--icon=icon.ico',
-    
-    # 输出目录
-    '--distpath=dist',                  # 输出目录
-    '--workpath=build',                 # 临时文件目录
+COMMON_HIDDEN_IMPORTS = [
+    "PyQt5.QtCore",
+    "PyQt5.QtGui",
+    "PyQt5.QtWidgets",
+    "numpy",
+    "scipy",
+    "scipy.io",
+    "scipy.io.wavfile",
+    "pygame",
+    "soundfile",
+    "mido",
+    "mido.backends",
+    "mcp",
+    "mcp.server.fastmcp",
+    "mcp_server",
+    "mcp_server.eightbit_mcp_server",
 ]
 
-print("开始打包...")
-print("=" * 50)
+COMMON_EXCLUDES = [
+    "matplotlib",
+    "tkinter",
+    "IPython",
+    "jupyter",
+]
 
-try:
-    PyInstaller.__main__.run(args)
+
+def _hidden_import_args() -> list[str]:
+    return [f"--hidden-import={name}" for name in COMMON_HIDDEN_IMPORTS]
+
+
+def _exclude_args() -> list[str]:
+    return [f"--exclude-module={name}" for name in COMMON_EXCLUDES]
+
+
+def _build_args(entry: str, name: str, *, windowed: bool) -> list[str]:
+    mode = "--windowed" if windowed else "--console"
+    return [
+        entry,
+        f"--name={name}",
+        "--onefile",
+        mode,
+        "--clean",
+        "--noconfirm",
+        *_hidden_import_args(),
+        *_exclude_args(),
+        "--distpath=dist",
+        "--workpath=build",
+    ]
+
+
+def main() -> int:
+    print("Starting package build...")
     print("=" * 50)
-    print("打包完成！")
-    print(f"exe文件位置: {os.path.join(project_root, 'dist', APP_NAME + '.exe')}")
-except Exception as e:
-    print(f"打包失败: {e}")
-    sys.exit(1)
+    try:
+        PyInstaller.__main__.run(_build_args("main.py", APP_NAME, windowed=True))
+        PyInstaller.__main__.run(
+            _build_args("mcp_server_launcher.py", "8bit-mcp-server", windowed=False)
+        )
+    except Exception as exc:
+        print(f"Package build failed: {exc}")
+        return 1
+
+    print("=" * 50)
+    print("Package build complete")
+    print(f"Desktop exe: {os.path.join(PROJECT_ROOT, 'dist', APP_NAME + '.exe')}")
+    print(f"MCP server exe: {os.path.join(PROJECT_ROOT, 'dist', '8bit-mcp-server.exe')}")
+    return 0
 
 
+if __name__ == "__main__":
+    sys.exit(main())

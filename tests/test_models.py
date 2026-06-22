@@ -1,4 +1,11 @@
 import core.models as models_module
+from core.effect_processor import (
+    DelayParams,
+    FilterParams,
+    FilterType,
+    TremoloParams,
+    VibratoParams,
+)
 from core.models import (
     ADSRParams,
     BPMSegment,
@@ -87,6 +94,54 @@ def test_track_role_round_trip_is_preserved():
     restored = Track.from_dict(track.to_dict())
 
     assert restored.role == TrackRole.BASS
+
+
+def test_track_effect_params_round_trip_is_preserved():
+    track = Track(
+        name="SFX",
+        track_type=TrackType.NOTE_TRACK,
+        role=TrackRole.EFFECT,
+        notes=[Note(pitch=84, start_time=0.0, duration=0.25)],
+        filter_params=FilterParams(
+            filter_type=FilterType.HIGHPASS,
+            cutoff_frequency=2200.0,
+            resonance=1.8,
+            enabled=True,
+        ),
+        delay_params=DelayParams(
+            delay_time=0.08,
+            feedback=0.2,
+            mix=0.35,
+            enabled=True,
+        ),
+        tremolo_params=TremoloParams(
+            rate=12.0,
+            depth=0.25,
+            enabled=True,
+        ),
+        vibrato_params=VibratoParams(
+            rate=8.0,
+            depth=1.5,
+            enabled=True,
+        ),
+    )
+
+    restored = Track.from_dict(track.to_dict())
+
+    assert restored.filter_params.filter_type == FilterType.HIGHPASS
+    assert restored.filter_params.cutoff_frequency == 2200.0
+    assert restored.filter_params.resonance == 1.8
+    assert restored.filter_params.enabled is True
+    assert restored.delay_params.delay_time == 0.08
+    assert restored.delay_params.feedback == 0.2
+    assert restored.delay_params.mix == 0.35
+    assert restored.delay_params.enabled is True
+    assert restored.tremolo_params.rate == 12.0
+    assert restored.tremolo_params.depth == 0.25
+    assert restored.tremolo_params.enabled is True
+    assert restored.vibrato_params.rate == 8.0
+    assert restored.vibrato_params.depth == 1.5
+    assert restored.vibrato_params.enabled is True
 
 
 def test_track_role_falls_back_to_legacy_name_inference_when_missing():

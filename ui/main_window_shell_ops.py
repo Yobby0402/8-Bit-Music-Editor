@@ -485,6 +485,21 @@ class MainWindowShellOpsMixin:
         self._add_action(play_menu, "停止(&S)", self.stop, shortcut="Ctrl+.")
 
         self._add_action(menubar, "生成(&G)", self.generate_music_from_seed)
+
+        sfx_menu = menubar.addMenu("SFX(&X)")
+        self._add_action(sfx_menu, "SFX editor...", self.show_sfx_editor)
+        sfx_menu.addSeparator()
+        self._add_action(sfx_menu, "Coin pickup", self.insert_coin_sfx)
+        self._add_action(sfx_menu, "Jump", self.insert_jump_sfx)
+        self._add_action(sfx_menu, "Hit", self.insert_hit_sfx)
+        self._add_action(sfx_menu, "Power up", self.insert_power_up_sfx)
+        self._add_action(sfx_menu, "Laser", self.insert_laser_sfx)
+        self._add_action(sfx_menu, "Explosion", self.insert_explosion_sfx)
+        self._add_action(sfx_menu, "Menu select", self.insert_select_sfx)
+        self._add_action(sfx_menu, "Error beep", self.insert_error_sfx)
+        self._add_action(sfx_menu, "Door open", self.insert_door_sfx)
+        self._add_action(sfx_menu, "Heal", self.insert_heal_sfx)
+
         self._add_action(menubar, "设置(&S)", self.show_settings)
 
         help_menu = menubar.addMenu("帮助(&H)")
@@ -513,6 +528,10 @@ class MainWindowShellOpsMixin:
             return
 
         if self.check_unsaved_changes():
+            service = getattr(self, "_app_control_service", None)
+            if service is not None:
+                service.stop()
+                self._app_control_service = None
             self.sequencer.cleanup()
             event.accept()
         else:

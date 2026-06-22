@@ -347,13 +347,18 @@ class Sequencer:
             notes.extend(track.get_notes_in_range(start_time, end_time))
         return notes
     
-    def play(self, start_time: float = 0.0, loop: bool = False) -> None:
+    def play(
+        self,
+        start_time: float = 0.0,
+        loop: bool = False,
+        end_time: Optional[float] = None,
+    ) -> bool:
         """Synchronously play via the prepared-playback pipeline."""
-        plan = self.prepare_playback(start_time=start_time, loop=loop)
+        plan = self.prepare_playback(start_time=start_time, loop=loop, end_time=end_time)
         if plan is None:
             self.stop()
-            return
-        self.start_prepared_playback(plan)
+            return False
+        return self.start_prepared_playback(plan)
     
     def pause(self) -> None:
         """暂停播放"""
@@ -372,14 +377,16 @@ class Sequencer:
         self,
         start_time: float = 0.0,
         loop: bool = False,
+        end_time: Optional[float] = None,
     ) -> PreparedPlaybackPlan | None:
         """Prepare track audio for playback without touching pygame state."""
+        loop_end = self.playback_state.loop_end if end_time is None else end_time
         return prepare_playback_plan(
             self.project,
             self.audio_engine.sample_rate,
             start_time=start_time,
             loop=loop,
-            loop_end=self.playback_state.loop_end,
+            loop_end=loop_end,
             playback_enabled_tracks=self.playback_enabled_tracks,
             playback_volume_ratios=self.playback_volume_ratios,
         )

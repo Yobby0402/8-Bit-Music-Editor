@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QMainWindow
 from core.score_library import ScoreLibrary
 from core.sequencer import Sequencer
 from ui.main_window_app_ops import MainWindowAppOpsMixin
+from ui.app_control_service import AppControlService
 from ui.main_window_editor_ops import MainWindowEditorOpsMixin
 from ui.main_window_note_entry_ops import MainWindowNoteEntryOpsMixin
 from ui.main_window_playback_ops import MainWindowPlaybackOpsMixin
@@ -16,6 +17,7 @@ from ui.main_window_refresh_ops import MainWindowRefreshOpsMixin
 from ui.main_window_score_ops import MainWindowScoreOpsMixin
 from ui.main_window_seed_ops import MainWindowSeedOpsMixin
 from ui.main_window_shell_ops import MainWindowShellOpsMixin
+from ui.main_window_sfx_ops import MainWindowSfxOpsMixin
 from ui.main_window_theme_ops import MainWindowThemeOpsMixin
 from ui.main_window_view_ops import MainWindowViewOpsMixin
 from ui.settings_manager import get_settings_manager
@@ -31,6 +33,7 @@ class MainWindow(
     MainWindowNoteEntryOpsMixin,
     MainWindowAppOpsMixin,
     MainWindowSeedOpsMixin,
+    MainWindowSfxOpsMixin,
     MainWindowThemeOpsMixin,
     MainWindowRefreshOpsMixin,
     MainWindowShellOpsMixin,
@@ -53,6 +56,7 @@ class MainWindow(
         self._playback_prepare_thread = None
         self._playback_prepare_worker = None
         self._playback_prepare_request_id = 0
+        self._app_control_service = None
 
         self.settings = QSettings("8bit", "MusicMaker")
         self.shortcut_manager = get_shortcut_manager()
@@ -81,6 +85,17 @@ class MainWindow(
         )
         self._playback_settings_restart_delay = 800
 
+        self._start_app_control_service()
+
     def init_default_tracks(self):
         """Legacy hook kept for compatibility."""
         pass
+
+    def _start_app_control_service(self):
+        """Start the localhost control service used by MCP/app integrations."""
+        try:
+            self._app_control_service = AppControlService(self)
+            self._app_control_service.start()
+        except Exception as exc:
+            self._app_control_service = None
+            self.statusBar().showMessage(f"App control service unavailable: {exc}")

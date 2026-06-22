@@ -73,8 +73,8 @@ def test_sequencer_play_uses_prepared_playback_pipeline(monkeypatch):
     )
     calls = {}
 
-    def fake_prepare_playback(*, start_time=0.0, loop=False):
-        calls["prepare"] = (start_time, loop)
+    def fake_prepare_playback(*, start_time=0.0, loop=False, end_time=None):
+        calls["prepare"] = (start_time, loop, end_time)
         return fake_plan
 
     def fake_start_prepared_playback(plan):
@@ -84,9 +84,10 @@ def test_sequencer_play_uses_prepared_playback_pipeline(monkeypatch):
     monkeypatch.setattr(sequencer, "prepare_playback", fake_prepare_playback)
     monkeypatch.setattr(sequencer, "start_prepared_playback", fake_start_prepared_playback)
 
-    sequencer.play(start_time=0.5, loop=True)
+    result = sequencer.play(start_time=0.5, loop=True, end_time=0.9)
 
-    assert calls["prepare"] == (0.5, True)
+    assert result is True
+    assert calls["prepare"] == (0.5, True, 0.9)
     assert calls["start"] is fake_plan
 
 

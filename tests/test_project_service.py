@@ -2,12 +2,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.models import Project, WaveformType
+from core.models import Project, Track, TrackRole, WaveformType
 from core.project_service import (
     AudioExportDependencyError,
     EmptyAudioExportError,
     build_audio_export_dependency_guidance,
     export_audio_document,
+    export_audio_range_document,
     export_midi_document,
     import_midi_document,
     load_project_document,
@@ -146,4 +147,87 @@ def test_export_audio_document_returns_export_result(monkeypatch):
         "file_path": "theme.wav",
         "sample_rate": 32000,
         "format": "wav",
+    }
+
+
+def test_export_audio_range_document_uses_time_range(monkeypatch):
+    project = Project(name="range-demo")
+    captured = {}
+
+    def fake_generate_project_audio(project_arg, *, start_time, end_time, playback_enabled_tracks=None):
+        captured["project"] = project_arg
+        captured["start_time"] = start_time
+        captured["end_time"] = end_time
+        captured["playback_enabled_tracks"] = playback_enabled_tracks
+        return [0.1, 0.2]
+
+    engine = SimpleNamespace(sample_rate=32000, generate_project_audio=fake_generate_project_audio)
+
+    def fake_export_audio(audio, file_path, sample_rate, format):
+        captured["audio"] = audio
+        captured["file_path"] = file_path
+        captured["sample_rate"] = sample_rate
+        captured["format"] = format
+
+    monkeypatch.setattr("core.audio_export.AudioExporter.export_audio", fake_export_audio)
+
+    result = export_audio_range_document(
+        project,
+        engine,
+        "range.wav",
+        start_time=0.5,
+        end_time=1.25,
+        format="wav",
+    )
+
+    assert result.file_path == "range.wav"
+    assert captured == {
+        "project": project,
+        "start_time": 0.5,
+        "end_time": 1.25,
+        "playback_enabled_tracks": None,
+        "audio": [0.1, 0.2],
+        "file_path": "range.wav",
+        "sample_rate": 32000,
+        "format": "wav",
+    }
+
+
+def test_export_audio_range_document_can_render_sfx_only(monkeypatch):
+    project = Project(name="sfx-only")
+    melody = Track(name="Lead")
+    sfx = Track(name="SFX", role=TrackRole.EFFECT)
+    project.add_track(melody)
+    project.add_track(sfx)
+    captured = {}
+
+    def fake_generate_project_audio(project_arg, *, start_time, end_time, playback_enabled_tracks=None):
+        captured["project"] = project_arg
+        captured["start_time"] = start_time
+        captured["end_time"] = end_time
+        captured["playback_enabled_tracks"] = playback_enabled_tracks
+        return [0.1, 0.2]
+
+    engine = SimpleNamespace(sample_rate=32000, generate_project_audio=fake_generate_project_audio)
+
+    def fake_export_audio(audio, file_path, sample_rate, format):
+        captured["audio"] = audio
+        captured["file_path"] = file_path
+        captured["sample_rate"] = sample_rate
+        captured["format"] = format
+
+    monkeypatch.setattr("core.audio_export.AudioExporter.export_audio", fake_export_audio)
+
+    export_audio_range_document(
+        project,
+        engine,
+        "sfx.wav",
+        start_time=0.5,
+        end_time=1.25,
+        sfx_only=True,
+    )
+
+    assert captured["playback_enabled_tracks"] == {
+        id(melody): False,
+        id(sfx): True,
     }

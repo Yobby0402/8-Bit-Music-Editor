@@ -1,4 +1,4 @@
-"""
+﻿"""
 项目相关服务层。
 
 统一承接项目文件读写、MIDI 导入以及导出流程中的核心业务逻辑。
@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from core.midi_io import MidiIO
-from core.models import Project, WaveformType
+from core.models import Project, TrackRole, WaveformType
 from core.project_io import load_project_from_file, save_project_to_file
 
 MP3_EXPORT_DEPENDENCY_MESSAGE = (
@@ -157,6 +157,49 @@ def export_audio_document(
     audio = audio_engine.generate_project_audio(project)
     if len(audio) == 0:
         raise EmptyAudioExportError("项目中没有音频数据")
+
+    try:
+        AudioExporter.export_audio(audio, file_path, audio_engine.sample_rate, format=format)
+    except ImportError as exc:
+        guidance = build_audio_export_dependency_guidance(format, str(exc))
+        if guidance is not None:
+            raise AudioExportDependencyError(guidance) from exc
+        raise
+
+    return AudioExportResult(file_path=file_path, format=format.lower())
+
+
+def export_audio_range_document(
+    project: Project,
+    audio_engine: Any,
+    file_path: str,
+    *,
+    start_time: float,
+    end_time: float,
+    format: str = "wav",
+    sfx_only: bool = False,
+) -> AudioExportResult:
+    """Export a time range from the project audio."""
+    from core.audio_export import AudioExporter
+
+    if end_time <= start_time:
+        raise EmptyAudioExportError("Export range is empty")
+
+    playback_enabled_tracks = None
+    if sfx_only:
+        playback_enabled_tracks = {
+            id(track): track.role == TrackRole.EFFECT
+            for track in project.tracks
+        }
+
+    audio = audio_engine.generate_project_audio(
+        project,
+        start_time=start_time,
+        end_time=end_time,
+        playback_enabled_tracks=playback_enabled_tracks,
+    )
+    if len(audio) == 0:
+        raise EmptyAudioExportError("Project range has no audio data")
 
     try:
         AudioExporter.export_audio(audio, file_path, audio_engine.sample_rate, format=format)

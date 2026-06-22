@@ -27,6 +27,28 @@ class FilterParams:
     resonance: float = 1.0  # 共振（Q值，1.0-10.0）
     enabled: bool = False
 
+    def to_dict(self) -> dict:
+        return {
+            "filter_type": self.filter_type.value,
+            "cutoff_frequency": self.cutoff_frequency,
+            "resonance": self.resonance,
+            "enabled": self.enabled,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "FilterParams":
+        filter_type = data.get("filter_type", FilterType.LOWPASS.value)
+        try:
+            resolved_type = FilterType(filter_type)
+        except ValueError:
+            resolved_type = FilterType.LOWPASS
+        return cls(
+            filter_type=resolved_type,
+            cutoff_frequency=float(data.get("cutoff_frequency", 1000.0)),
+            resonance=float(data.get("resonance", 1.0)),
+            enabled=bool(data.get("enabled", False)),
+        )
+
 
 @dataclass
 class DelayParams:
@@ -36,6 +58,23 @@ class DelayParams:
     mix: float = 0.5  # 混合比例（0-1）
     enabled: bool = False
 
+    def to_dict(self) -> dict:
+        return {
+            "delay_time": self.delay_time,
+            "feedback": self.feedback,
+            "mix": self.mix,
+            "enabled": self.enabled,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DelayParams":
+        return cls(
+            delay_time=float(data.get("delay_time", 0.1)),
+            feedback=float(data.get("feedback", 0.3)),
+            mix=float(data.get("mix", 0.5)),
+            enabled=bool(data.get("enabled", False)),
+        )
+
 
 @dataclass
 class TremoloParams:
@@ -44,6 +83,21 @@ class TremoloParams:
     depth: float = 0.5  # 调制深度（0-1）
     enabled: bool = False
 
+    def to_dict(self) -> dict:
+        return {
+            "rate": self.rate,
+            "depth": self.depth,
+            "enabled": self.enabled,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "TremoloParams":
+        return cls(
+            rate=float(data.get("rate", 6.0)),
+            depth=float(data.get("depth", 0.5)),
+            enabled=bool(data.get("enabled", False)),
+        )
+
 
 @dataclass
 class VibratoParams:
@@ -51,6 +105,21 @@ class VibratoParams:
     rate: float = 6.0  # 调制速度（Hz）
     depth: float = 2.0  # 调制深度（半音数）
     enabled: bool = False
+
+    def to_dict(self) -> dict:
+        return {
+            "rate": self.rate,
+            "depth": self.depth,
+            "enabled": self.enabled,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "VibratoParams":
+        return cls(
+            rate=float(data.get("rate", 6.0)),
+            depth=float(data.get("depth", 2.0)),
+            enabled=bool(data.get("enabled", False)),
+        )
 
 
 class EffectProcessor:
