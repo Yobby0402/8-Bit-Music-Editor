@@ -273,6 +273,31 @@ def sfx_spec_from_dict(data: dict[str, Any]) -> SfxSpec:
     )
 
 
+def sfx_spec_to_dict(spec: SfxSpec) -> dict[str, Any]:
+    """Convert an SFX spec to the validated AI/MCP payload shape."""
+    return {
+        "kind": spec.kind,
+        "label": spec.label,
+        "notes": [
+            {
+                "pitch": note.pitch,
+                "start_beat": note.start_beat,
+                "duration_beats": note.duration_beats,
+                "velocity": note.velocity,
+                "waveform": note.waveform.value,
+                "duty_cycle": note.duty_cycle,
+                "adsr": note.adsr.to_dict(),
+                "vibrato": note.vibrato.to_dict() if note.vibrato else None,
+            }
+            for note in spec.notes
+        ],
+        "filter_params": spec.filter_params.to_dict() if spec.filter_params else None,
+        "delay_params": spec.delay_params.to_dict() if spec.delay_params else None,
+        "tremolo_params": spec.tremolo_params.to_dict() if spec.tremolo_params else None,
+        "vibrato_params": spec.vibrato_params.to_dict() if spec.vibrato_params else None,
+    }
+
+
 def find_sfx_track(tracks: Iterable[Track]) -> Track | None:
     """Find the first existing note track dedicated to sound effects."""
     for track in tracks:
@@ -332,5 +357,6 @@ __all__ = [
     "list_sfx_presets",
     "make_sfx_track",
     "sfx_spec_from_dict",
+    "sfx_spec_to_dict",
     "sfx_note_to_note",
 ]

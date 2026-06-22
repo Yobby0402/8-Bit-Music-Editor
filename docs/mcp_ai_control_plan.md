@@ -64,6 +64,11 @@ Current UI:
 
 - The SFX menu exposes all presets.
 - The SFX editor dialog can choose a preset, insertion beat, and auto-preview.
+- The SFX editor dialog can edit note-level pitch, start beat, duration,
+  velocity, waveform, duty cycle, and ADSR values before insertion.
+- The SFX editor dialog can ask the configured local OpenAI-compatible model to
+  generate a structured SFX spec from a natural language prompt, then lets the
+  user revise the generated notes before inserting them.
 - Presets can actively configure SFX track filter, delay, tremolo, and vibrato
   params as part of the same undoable insert command.
 
@@ -196,11 +201,13 @@ Host setup examples are in [mcp_host_setup.md](mcp_host_setup.md).
 
 ## Phase 4: AI-assisted SFX and arrangement
 
+Status: implemented for the first in-app SFX flow.
+
 Success criteria:
 
 - AI can map natural language to a structured `SfxSpec`.
 - AI output is validated before any project mutation.
-- The user can accept, reject, preview, or undo the generated result.
+- The user can revise, accept, reject, preview, or undo the generated result.
 
 Example structured SFX payload:
 
@@ -250,10 +257,9 @@ Current custom insertion tool payload:
 
 ## Deferred work
 
-- Add a richer graphical SFX editor for note-level pitch envelopes, ADSR, and
-  per-note waveform editing.
-- Add natural-language-to-SfxSpec generation inside the app instead of requiring
-  the AI host to provide the structured payload.
+- Add pitch-envelope drawing and richer per-note modulation editing.
+- Add direct app-side controls for track filter, delay, tremolo, and vibrato
+  params in the SFX editor.
 - Add app transport selection beyond the default localhost bridge, such as
   Streamable HTTP or named-pipe IPC for app-hosted workflows.
 - Extend app-side permission prompts beyond export to future destructive or

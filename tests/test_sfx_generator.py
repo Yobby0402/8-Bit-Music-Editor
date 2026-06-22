@@ -6,6 +6,7 @@ from core.sfx_generator import (
     list_sfx_presets,
     make_sfx_track,
     sfx_spec_from_dict,
+    sfx_spec_to_dict,
 )
 
 
@@ -126,6 +127,17 @@ def test_sfx_spec_from_dict_accepts_track_effect_payloads():
     assert spec.tremolo_params.rate == 40.0
     assert spec.tremolo_params.depth == 1.0
     assert spec.vibrato_params is not None
+
+
+def test_sfx_spec_to_dict_round_trips_effect_payload():
+    original = build_sfx_spec("power_up")
+
+    restored = sfx_spec_from_dict(sfx_spec_to_dict(original))
+
+    assert restored.kind == "power_up"
+    assert len(restored.notes) == len(original.notes)
+    assert restored.delay_params is not None
+    assert restored.tremolo_params is not None
 
 
 def test_sfx_spec_from_dict_rejects_missing_notes():

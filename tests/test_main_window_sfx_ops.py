@@ -4,6 +4,7 @@ import pytest
 from PyQt5.QtWidgets import QApplication
 
 from core.models import Project
+from core.sfx_generator import SfxNoteSpec, SfxSpec
 from ui.main_window_sfx_ops import resolve_sfx_insert_beat
 from ui.sfx_editor_dialog import SfxEditorDialog
 
@@ -37,6 +38,49 @@ def test_sfx_editor_dialog_exposes_selected_options():
         assert dialog.selected_kind() == "laser"
         assert dialog.start_beat() == 2.5
         assert dialog.auto_preview() is False
+        assert dialog.note_table.rowCount() == 3
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        app.processEvents()
+
+
+def test_sfx_editor_dialog_returns_edited_note_spec():
+    app = _app()
+    dialog = SfxEditorDialog(start_beat=0.0)
+
+    try:
+        dialog.note_table.item(0, 0).setText("90")
+        dialog.note_table.item(0, 4).setText("triangle")
+        dialog.note_table.item(0, 6).setText("0.01")
+        spec = dialog.spec()
+
+        assert spec.notes[0].pitch == 90
+        assert spec.notes[0].waveform.value == "triangle"
+        assert spec.notes[0].adsr.attack == 0.01
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        app.processEvents()
+
+
+def test_sfx_editor_dialog_applies_ai_spec():
+    app = _app()
+    dialog = SfxEditorDialog(start_beat=0.0)
+
+    try:
+        spec = SfxSpec(
+            kind="coin_ai",
+            label="AI coin",
+            notes=(SfxNoteSpec(88, 0.0, 0.12),),
+        )
+        dialog.apply_ai_spec(spec)
+
+        edited = dialog.spec()
+        assert edited.kind == "coin_ai"
+        assert edited.label == "AI coin"
+        assert edited.notes[0].pitch == 88
+        assert dialog.note_table.rowCount() == 1
     finally:
         dialog.close()
         dialog.deleteLater()
