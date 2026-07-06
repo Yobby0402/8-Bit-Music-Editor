@@ -236,6 +236,16 @@ class MainWindowShellOpsMixin:
         self.stop_button.clicked.connect(self.stop)
         playback_control_layout.addWidget(self.stop_button)
 
+        self.hover_preview_enabled = bool(getattr(self, "hover_preview_enabled", True))
+        self.hover_preview_button = QPushButton("悬停试听")
+        self.hover_preview_button.setToolTip("开启后，鼠标滑过音符和鼓面板会播放预览音")
+        self.hover_preview_button.setCheckable(True)
+        self.hover_preview_button.setChecked(self.hover_preview_enabled)
+        self.hover_preview_button.setFixedSize(84, 36)
+        self.hover_preview_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.hover_preview_button.toggled.connect(self.set_hover_preview_enabled)
+        playback_control_layout.addWidget(self.hover_preview_button)
+
         playback_control_layout.addSpacing(12)
 
         bpm_label = QLabel("BPM:")
@@ -443,11 +453,9 @@ class MainWindowShellOpsMixin:
             self.right_panel_stack.addWidget(wrap_right_panel_page(panel))
 
         self.sfx_editor_panel = SfxEditorWidget(self)
+        self.sfx_editor_panel.preview_button.clicked.connect(self.preview_sfx_from_panel)
+        self.sfx_editor_panel.export_button.clicked.connect(self.export_sfx_from_panel)
         self.sfx_editor_panel.insert_button.clicked.connect(self.insert_sfx_from_panel)
-        self.sfx_editor_panel.ai_generate_button.clicked.disconnect()
-        self.sfx_editor_panel.ai_generate_button.clicked.connect(
-            lambda: self._request_sfx_ai_generation(self.sfx_editor_panel)
-        )
         self.right_panel_stack.addWidget(wrap_right_panel_page(self.sfx_editor_panel))
 
         for index, (key, _label) in enumerate(RIGHT_PANEL_PAGES):
@@ -642,6 +650,14 @@ class MainWindowShellOpsMixin:
         play_menu = menubar.addMenu("播放(&P)")
         self._add_action(play_menu, "播放/暂停", self.toggle_play_pause, shortcut=Qt.Key_Space)
         self._add_action(play_menu, "停止(&S)", self.stop, shortcut="Ctrl+.")
+        self.hover_preview_action = self._add_action(
+            play_menu,
+            "悬停试听(&H)",
+            self.set_hover_preview_enabled,
+            checkable=True,
+            checked=bool(getattr(self, "hover_preview_enabled", True)),
+        )
+        self._sync_hover_preview_controls()
 
         self._add_action(menubar, "生成(&G)", self.generate_music_from_seed)
 

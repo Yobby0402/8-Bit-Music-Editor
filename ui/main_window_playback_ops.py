@@ -38,7 +38,36 @@ class MainWindowPlaybackOpsMixin:
 
     def _set_preview_enabled(self, enabled: bool):
         """统一控制编辑器预览状态。"""
-        self.unified_editor.set_preview_enabled(enabled)
+        effective_enabled = bool(enabled) and bool(getattr(self, "hover_preview_enabled", True))
+        self.unified_editor.set_preview_enabled(effective_enabled)
+
+    def _sync_hover_preview_controls(self) -> None:
+        """Keep hover-preview UI controls aligned with the user preference."""
+        checked = bool(getattr(self, "hover_preview_enabled", True))
+        for control_name in ("hover_preview_button", "hover_preview_action"):
+            control = getattr(self, control_name, None)
+            if control is None or not hasattr(control, "setChecked"):
+                continue
+            previous_signal_state = None
+            if hasattr(control, "blockSignals"):
+                previous_signal_state = control.blockSignals(True)
+            try:
+                control.setChecked(checked)
+            finally:
+                if previous_signal_state is not None:
+                    control.blockSignals(previous_signal_state)
+
+    def set_hover_preview_enabled(self, enabled: bool) -> None:
+        """Enable or disable note/drum hover preview sounds."""
+        self.hover_preview_enabled = bool(enabled)
+        self._sync_hover_preview_controls()
+        can_preview_now = (
+            not self.sequencer.playback_state.is_playing
+            and not self._has_pending_playback_prepare()
+        )
+        self._set_preview_enabled(can_preview_now)
+        state = "开启" if self.hover_preview_enabled else "关闭"
+        self.statusBar().showMessage(f"悬停试听已{state}")
 
     def _set_play_button_state(self, is_playing: bool):
         """统一更新播放按钮文本和提示。"""
@@ -420,5 +449,6 @@ class MainWindowPlaybackOpsMixin:
             not self.sequencer.playback_state.is_playing
             and not self.unified_editor.preview_enabled
             and not self._has_pending_playback_prepare()
+            and bool(getattr(self, "hover_preview_enabled", True))
         ):
             self._set_preview_enabled(True)

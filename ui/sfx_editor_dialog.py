@@ -16,8 +16,6 @@ from PyQt5.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
-    QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QSpinBox,
     QTableWidget,
@@ -88,20 +86,30 @@ class SfxEditorWidget(QWidget):
 
     def __init__(self, parent=None, *, start_beat: float = 0.0):
         super().__init__(parent)
+        self.setObjectName("sfxEditorPanel")
         self.setMinimumWidth(360)
         self._spec = build_sfx_spec("coin")
-        self._ai_thread = None
         self._updating_note_detail = False
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
+
+        title = QLabel("音效编辑")
+        title.setObjectName("panelTitle")
+        layout.addWidget(title)
+
+        controls_panel = QWidget()
+        controls_panel.setProperty("panelToolbar", True)
+        controls_layout = QVBoxLayout(controls_panel)
+        controls_layout.setContentsMargins(8, 6, 8, 6)
+        controls_layout.setSpacing(6)
 
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
-        form.setHorizontalSpacing(10)
+        form.setHorizontalSpacing(8)
         form.setVerticalSpacing(6)
-        layout.addLayout(form)
+        controls_layout.addLayout(form)
 
         self.preset_combo = QComboBox()
         for kind, label in SFX_PRESET_LABELS.items():
@@ -123,19 +131,7 @@ class SfxEditorWidget(QWidget):
         self.auto_preview_checkbox.setChecked(True)
         form.addRow("", self.auto_preview_checkbox)
 
-        self.ai_prompt_edit = QPlainTextEdit()
-        self.ai_prompt_edit.setFixedHeight(64)
-        self.ai_prompt_edit.setPlaceholderText("吃金币、激光、开门、受击...")
-        form.addRow("AI 描述", self.ai_prompt_edit)
-
-        ai_row = QHBoxLayout()
-        self.ai_generate_button = QPushButton("AI 生成")
-        self.ai_generate_button.setProperty("primaryAction", True)
-        self.ai_generate_button.clicked.connect(self.request_ai_generation)
-        self.ai_status_label = QLabel("")
-        ai_row.addWidget(self.ai_generate_button)
-        ai_row.addWidget(self.ai_status_label, 1)
-        form.addRow("", ai_row)
+        layout.addWidget(controls_panel)
 
         self.note_table = QTableWidget(0, len(NOTE_COLUMNS))
         self.note_table.setHorizontalHeaderLabels(NOTE_COLUMNS)
@@ -151,6 +147,8 @@ class SfxEditorWidget(QWidget):
         layout.addWidget(self.note_table, 1)
 
         note_buttons = QHBoxLayout()
+        note_buttons.setContentsMargins(0, 0, 0, 0)
+        note_buttons.setSpacing(6)
         add_button = QPushButton("添加音符")
         remove_button = QPushButton("移除音符")
         add_button.clicked.connect(self.add_note_row)
@@ -161,6 +159,7 @@ class SfxEditorWidget(QWidget):
         layout.addLayout(note_buttons)
 
         detail_title = QLabel("选中音符")
+        detail_title.setObjectName("panelTitle")
         layout.addWidget(detail_title)
 
         detail_grid = QGridLayout()
@@ -260,9 +259,24 @@ class SfxEditorWidget(QWidget):
             else:
                 widget.valueChanged.connect(lambda _value: self._write_detail_to_selected_row())
 
+        action_buttons = QHBoxLayout()
+        action_buttons.setContentsMargins(0, 0, 0, 0)
+        action_buttons.setSpacing(6)
+
+        self.preview_button = QPushButton("试听当前编辑音效")
+        self.preview_button.setToolTip("不插入工程，直接试听当前面板里的音效")
+        action_buttons.addWidget(self.preview_button)
+
+        self.export_button = QPushButton("SFX-only 导出")
+        self.export_button.setToolTip("只导出当前编辑音效，不混入主旋律或鼓")
+        action_buttons.addWidget(self.export_button)
+
+        action_buttons.addStretch()
+
         self.insert_button = QPushButton("插入音效")
         self.insert_button.setProperty("primaryAction", True)
-        layout.addWidget(self.insert_button)
+        action_buttons.addWidget(self.insert_button)
+        layout.addLayout(action_buttons)
 
         self._load_spec(self._spec)
 
@@ -339,7 +353,8 @@ class SfxEditorWidget(QWidget):
             vibrato_params=self._spec.vibrato_params,
         )
 
-    def apply_ai_spec(self, spec: SfxSpec) -> None:
+    def apply_external_spec(self, spec: SfxSpec) -> None:
+        """Load an externally produced spec into the manual editor."""
         self._load_spec(spec)
         index = self.preset_combo.findData(spec.kind)
         if index >= 0:
@@ -347,20 +362,9 @@ class SfxEditorWidget(QWidget):
             self.preset_combo.setCurrentIndex(index)
             self.preset_combo.blockSignals(False)
 
-    def request_ai_generation(self) -> None:
-        self.ai_status_label.setText("AI 生成由主窗口处理")
-
-    def ai_prompt(self) -> str:
-        return self.ai_prompt_edit.toPlainText().strip()
-
-    def show_ai_error(self, message: str) -> None:
-        self.ai_status_label.setText("")
-        self.ai_generate_button.setEnabled(True)
-        QMessageBox.warning(self, "SFX AI", message)
-
-    def set_ai_busy(self, busy: bool) -> None:
-        self.ai_generate_button.setEnabled(not busy)
-        self.ai_status_label.setText("生成中..." if busy else "")
+    def apply_ai_spec(self, spec: SfxSpec) -> None:
+        """Backward-compatible alias for externally supplied specs."""
+        self.apply_external_spec(spec)
 
     def _note_from_row(self, row: int) -> SfxNoteSpec:
         def text(column: int) -> str:
@@ -463,7 +467,6 @@ class SfxEditorDialog(QDialog):
         self.preset_combo = self.editor.preset_combo
         self.auto_preview_checkbox = self.editor.auto_preview_checkbox
         self.note_table = self.editor.note_table
-        self.ai_generate_button = self.editor.ai_generate_button
 
     def __getattr__(self, name: str):
         editor = self.__dict__.get("editor")

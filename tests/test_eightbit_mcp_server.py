@@ -141,6 +141,7 @@ def test_mcp_router_prefers_running_app_client_when_available():
     result = router.insert_sfx("coin", start_beat=2.0, dry_run=True)
 
     assert result["message"] == "from app"
+    assert result["mcp_target"] == "running_app"
     assert app_client.calls == [
         (
             "/insert-sfx",
@@ -285,6 +286,7 @@ def test_mcp_router_falls_back_when_app_client_is_unavailable():
 
     assert result["ok"] is True
     assert result["command"] == "stop_playback"
+    assert result["mcp_target"] == "fallback_memory"
 
 
 def test_localhost_app_client_returns_json_error_without_fallback():
@@ -306,6 +308,7 @@ def test_localhost_app_client_returns_json_error_without_fallback():
 
         assert result["ok"] is False
         assert result["command"] == "app_control_error"
+        assert result["mcp_target"] == "running_app"
         assert result["data"]["path"] == "/project"
         assert fallback_bridge.sequencer.project.tracks == []
     finally:

@@ -11,12 +11,15 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSlider,
     QSpinBox,
     QVBoxLayout,
@@ -31,7 +34,6 @@ from core.effect_processor import (
 )
 from core.models import Note, Track, TrackRole, TrackType, WaveformType, infer_track_role
 from core.track_events import DrumEvent
-from ui.theme import theme_manager
 
 TIMING_SNAP_BEATS = 0.25
 TRACK_PROPERTY_CHANGE_EFFECTS = "effects"
@@ -230,15 +232,17 @@ class PropertyPanelWidget(QWidget):
     
     def init_ui(self):
         """初始化UI"""
+        self.setObjectName("propertyPanel")
         layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
         self.setLayout(layout)
         
         # 设置属性面板的最大高度，确保不挡住面板切换按钮
         # 使用滚动区域来容纳内容，而不是让面板无限增长
-        from PyQt5.QtWidgets import QScrollArea
         scroll_area = QScrollArea()
+        scroll_area.setObjectName("propertyPanelScroll")
+        scroll_area.setFrameShape(QFrame.NoFrame)
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -246,7 +250,7 @@ class PropertyPanelWidget(QWidget):
         # 创建内容容器
         content_widget = QWidget()
         content_layout = QVBoxLayout()
-        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setContentsMargins(2, 2, 2, 2)
         content_layout.setSpacing(6)
         content_widget.setLayout(content_layout)
         
@@ -259,54 +263,49 @@ class PropertyPanelWidget(QWidget):
         # 保存引用以便后续添加控件
         self.content_layout = content_layout
         self.scroll_area = scroll_area
-
-        # 应用主题中的标签/输入框/下拉框等基础样式，使风格与主界面一致
-        try:
-            theme = theme_manager.current_theme
-            base_style = ""
-            base_style += theme.get_style("label")
-            base_style += theme.get_style("line_edit")
-            base_style += theme.get_style("combo_box")
-            base_style += theme.get_style("group_box")
-            self.setStyleSheet(base_style)
-        except Exception:
-            # 主题获取失败时不影响功能
-            pass
         
         # 标题
         title = QLabel("属性面板")
-        title.setStyleSheet("font-weight: bold; font-size: 14px; padding: 6px 4px;")
+        title.setObjectName("panelTitle")
         self.content_layout.addWidget(title)
         
         # 空状态提示
         self.empty_label = QLabel("未选中音符\n\n请点击序列编辑器中的音符来编辑属性")
+        self.empty_label.setObjectName("emptyState")
         self.empty_label.setAlignment(Qt.AlignCenter)
-        self.empty_label.setStyleSheet("color: gray; padding: 16px;")
         self.content_layout.addWidget(self.empty_label)
         
         # 多选提示
         self.multi_select_label = QLabel("")
+        self.multi_select_label.setObjectName("selectionSummary")
         self.multi_select_label.setAlignment(Qt.AlignCenter)
-        self.multi_select_label.setStyleSheet("color: blue; padding: 8px; font-weight: bold;")
         self.multi_select_label.setVisible(False)
         self.content_layout.addWidget(self.multi_select_label)
         
         # 属性编辑区域（初始隐藏）
         self.properties_group = QGroupBox("音符属性")
+        self.properties_group.setProperty("inspectorGroup", True)
         properties_layout = QVBoxLayout()
+        properties_layout.setContentsMargins(8, 6, 8, 6)
+        properties_layout.setSpacing(6)
         self.properties_group.setLayout(properties_layout)
         self.properties_group.setVisible(False)
         self.content_layout.addWidget(self.properties_group)
         
         # 音轨编辑区域（初始隐藏）
         self.track_edit_group = QGroupBox("音轨编辑")
+        self.track_edit_group.setProperty("inspectorGroup", True)
         track_edit_layout = QVBoxLayout()
+        track_edit_layout.setContentsMargins(8, 6, 8, 6)
+        track_edit_layout.setSpacing(6)
         self.track_edit_group.setLayout(track_edit_layout)
         self.track_edit_group.setVisible(False)
         self.content_layout.addWidget(self.track_edit_group)
         
         # 音轨类型选择
         track_type_layout = QHBoxLayout()
+        track_type_layout.setContentsMargins(0, 0, 0, 0)
+        track_type_layout.setSpacing(6)
         track_type_layout.addWidget(QLabel("音轨类型:"))
         self.track_type_combo = QComboBox()
         self.track_type_combo.addItems(["音符音轨", "打击乐音轨"])
@@ -319,6 +318,7 @@ class PropertyPanelWidget(QWidget):
         self.track_role_row_widget = QWidget()
         track_role_layout = QHBoxLayout()
         track_role_layout.setContentsMargins(0, 0, 0, 0)
+        track_role_layout.setSpacing(6)
         self.track_role_row_widget.setLayout(track_role_layout)
         track_role_layout.addWidget(QLabel("音轨角色:"))
         self.track_role_combo = QComboBox()
@@ -332,6 +332,8 @@ class PropertyPanelWidget(QWidget):
         
         # 音轨名称编辑
         track_name_layout = QHBoxLayout()
+        track_name_layout.setContentsMargins(0, 0, 0, 0)
+        track_name_layout.setSpacing(6)
         track_name_layout.addWidget(QLabel("音轨名称:"))
         self.track_name_edit = QLineEdit()
         self.track_name_edit.setPlaceholderText("输入音轨名称")
@@ -345,13 +347,18 @@ class PropertyPanelWidget(QWidget):
         
         # 批量编辑区域（初始隐藏）
         self.batch_edit_group = QGroupBox("批量编辑（多选音符）")
+        self.batch_edit_group.setProperty("inspectorGroup", True)
         batch_layout = QVBoxLayout()
+        batch_layout.setContentsMargins(8, 6, 8, 6)
+        batch_layout.setSpacing(6)
         self.batch_edit_group.setLayout(batch_layout)
         self.batch_edit_group.setVisible(False)
         self.content_layout.addWidget(self.batch_edit_group)
         
         # 批量编辑：波形（立即生效）
         batch_waveform_layout = QHBoxLayout()
+        batch_waveform_layout.setContentsMargins(0, 0, 0, 0)
+        batch_waveform_layout.setSpacing(6)
         batch_waveform_layout.addWidget(QLabel("统一设置波形:"))
         self.batch_waveform_combo = QComboBox()
         self.batch_waveform_combo.addItems(["方波", "三角波", "锯齿波", "正弦波", "噪声"])
@@ -362,6 +369,8 @@ class PropertyPanelWidget(QWidget):
         
         # 批量编辑：力度（立即生效）
         batch_velocity_layout = QHBoxLayout()
+        batch_velocity_layout.setContentsMargins(0, 0, 0, 0)
+        batch_velocity_layout.setSpacing(6)
         batch_velocity_layout.addWidget(QLabel("统一设置力度:"))
         self.batch_velocity_slider = QSlider(Qt.Horizontal)
         self.batch_velocity_slider.setRange(0, 127)
@@ -377,6 +386,8 @@ class PropertyPanelWidget(QWidget):
         
         # 批量编辑：力度偏移（在原有基础上加减）
         batch_velocity_offset_layout = QHBoxLayout()
+        batch_velocity_offset_layout.setContentsMargins(0, 0, 0, 0)
+        batch_velocity_offset_layout.setSpacing(6)
         batch_velocity_offset_layout.addWidget(QLabel("力度偏移:"))
         self.batch_velocity_offset_spinbox = QSpinBox()
         self.batch_velocity_offset_spinbox.setRange(-127, 127)
@@ -390,6 +401,8 @@ class PropertyPanelWidget(QWidget):
         
         # 批量编辑：占空比（仅方波，立即生效）
         batch_duty_layout = QHBoxLayout()
+        batch_duty_layout.setContentsMargins(0, 0, 0, 0)
+        batch_duty_layout.setSpacing(6)
         batch_duty_layout.addWidget(QLabel("统一设置占空比:"))
         self.batch_duty_spinbox = QDoubleSpinBox()
         self.batch_duty_spinbox.setRange(0.0, 1.0)
@@ -402,9 +415,10 @@ class PropertyPanelWidget(QWidget):
         batch_layout.addLayout(batch_duty_layout)
         
         # 使用GridLayout更好地利用空间（2列布局）
-        from PyQt5.QtWidgets import QGridLayout
         properties_grid = QGridLayout()
-        properties_grid.setSpacing(6)
+        properties_grid.setContentsMargins(0, 0, 0, 0)
+        properties_grid.setHorizontalSpacing(8)
+        properties_grid.setVerticalSpacing(6)
         properties_grid.setColumnStretch(1, 1)  # 第二列可拉伸
         
         row = 0
@@ -508,8 +522,12 @@ class PropertyPanelWidget(QWidget):
         
         # ADSR参数（使用GridLayout）
         adsr_group = QGroupBox("ADSR包络")
+        adsr_group.setProperty("inspectorGroup", True)
+        adsr_group.setProperty("innerGroup", True)
         adsr_grid = QGridLayout()
-        adsr_grid.setSpacing(6)
+        adsr_grid.setContentsMargins(0, 0, 0, 0)
+        adsr_grid.setHorizontalSpacing(8)
+        adsr_grid.setVerticalSpacing(6)
         adsr_grid.setColumnStretch(1, 1)  # 第二列可拉伸
         adsr_group.setLayout(adsr_grid)
         properties_layout.addWidget(adsr_group)
@@ -594,30 +612,31 @@ class PropertyPanelWidget(QWidget):
         # 移除应用按钮，属性改变立即生效
         # 保留重置按钮
         button_layout = QHBoxLayout()
+        button_layout.setContentsMargins(0, 0, 0, 0)
         reset_button = QPushButton("重置")
         reset_button.clicked.connect(self.reset_changes)
         button_layout.addWidget(reset_button)
         button_layout.addStretch()
-        
-        # 使用统一的小按钮样式
-        try:
-            theme = theme_manager.current_theme
-            reset_button.setStyleSheet(theme.get_style("button_small"))
-        except Exception:
-            pass
 
         properties_layout.addLayout(button_layout)
         
         # ========== 单个音符效果编辑区域 ==========
         self.note_effects_group = QGroupBox("音符效果")
+        self.note_effects_group.setProperty("inspectorGroup", True)
         note_effects_layout = QVBoxLayout()
+        note_effects_layout.setContentsMargins(8, 6, 8, 6)
+        note_effects_layout.setSpacing(6)
         self.note_effects_group.setLayout(note_effects_layout)
         self.note_effects_group.setVisible(False)
         self.content_layout.addWidget(self.note_effects_group)
         
         # 音符颤音（音高调制）
         note_vibrato_group = QGroupBox("颤音 (Vibrato)")
+        note_vibrato_group.setProperty("inspectorGroup", True)
+        note_vibrato_group.setProperty("innerGroup", True)
         note_vibrato_layout = QVBoxLayout()
+        note_vibrato_layout.setContentsMargins(6, 5, 6, 5)
+        note_vibrato_layout.setSpacing(6)
         note_vibrato_group.setLayout(note_vibrato_layout)
         
         # 启用复选框
@@ -627,6 +646,8 @@ class PropertyPanelWidget(QWidget):
         
         # 速度
         note_vibrato_rate_layout = QHBoxLayout()
+        note_vibrato_rate_layout.setContentsMargins(0, 0, 0, 0)
+        note_vibrato_rate_layout.setSpacing(6)
         note_vibrato_rate_layout.addWidget(QLabel("速度 (Hz):"))
         self.note_vibrato_rate_spinbox = QDoubleSpinBox()
         self.note_vibrato_rate_spinbox.setRange(0.1, 20.0)
@@ -639,6 +660,8 @@ class PropertyPanelWidget(QWidget):
         
         # 深度
         note_vibrato_depth_layout = QHBoxLayout()
+        note_vibrato_depth_layout.setContentsMargins(0, 0, 0, 0)
+        note_vibrato_depth_layout.setSpacing(6)
         note_vibrato_depth_layout.addWidget(QLabel("深度 (半音):"))
         self.note_vibrato_depth_spinbox = QDoubleSpinBox()
         self.note_vibrato_depth_spinbox.setRange(0.0, 12.0)
@@ -654,13 +677,20 @@ class PropertyPanelWidget(QWidget):
         
         # ========== 轨道效果编辑区域 ==========
         self.effects_group = QGroupBox("轨道效果")
+        self.effects_group.setProperty("inspectorGroup", True)
         effects_layout = QVBoxLayout()
+        effects_layout.setContentsMargins(8, 6, 8, 6)
+        effects_layout.setSpacing(6)
         self.effects_group.setLayout(effects_layout)
         self.content_layout.addWidget(self.effects_group)
         
         # 滤波器
         filter_group = QGroupBox("滤波器")
+        filter_group.setProperty("inspectorGroup", True)
+        filter_group.setProperty("innerGroup", True)
         filter_layout = QVBoxLayout()
+        filter_layout.setContentsMargins(6, 5, 6, 5)
+        filter_layout.setSpacing(6)
         filter_group.setLayout(filter_layout)
         
         # 启用复选框
@@ -670,6 +700,8 @@ class PropertyPanelWidget(QWidget):
         
         # 滤波器类型
         filter_type_layout = QHBoxLayout()
+        filter_type_layout.setContentsMargins(0, 0, 0, 0)
+        filter_type_layout.setSpacing(6)
         filter_type_layout.addWidget(QLabel("类型:"))
         self.filter_type_combo = QComboBox()
         self.filter_type_combo.addItems(["低通", "高通", "带通"])
@@ -680,6 +712,8 @@ class PropertyPanelWidget(QWidget):
         
         # 截止频率
         cutoff_layout = QHBoxLayout()
+        cutoff_layout.setContentsMargins(0, 0, 0, 0)
+        cutoff_layout.setSpacing(6)
         cutoff_layout.addWidget(QLabel("截止频率 (Hz):"))
         self.cutoff_spinbox = QDoubleSpinBox()
         self.cutoff_spinbox.setRange(20.0, 20000.0)
@@ -692,6 +726,8 @@ class PropertyPanelWidget(QWidget):
         
         # 共振
         resonance_layout = QHBoxLayout()
+        resonance_layout.setContentsMargins(0, 0, 0, 0)
+        resonance_layout.setSpacing(6)
         resonance_layout.addWidget(QLabel("共振 (Q):"))
         self.resonance_spinbox = QDoubleSpinBox()
         self.resonance_spinbox.setRange(0.1, 10.0)
@@ -706,7 +742,11 @@ class PropertyPanelWidget(QWidget):
         
         # 延迟效果
         delay_group = QGroupBox("延迟")
+        delay_group.setProperty("inspectorGroup", True)
+        delay_group.setProperty("innerGroup", True)
         delay_layout = QVBoxLayout()
+        delay_layout.setContentsMargins(6, 5, 6, 5)
+        delay_layout.setSpacing(6)
         delay_group.setLayout(delay_layout)
         
         # 启用复选框
@@ -716,6 +756,8 @@ class PropertyPanelWidget(QWidget):
         
         # 延迟时间
         delay_time_layout = QHBoxLayout()
+        delay_time_layout.setContentsMargins(0, 0, 0, 0)
+        delay_time_layout.setSpacing(6)
         delay_time_layout.addWidget(QLabel("延迟时间 (秒):"))
         self.delay_time_spinbox = QDoubleSpinBox()
         self.delay_time_spinbox.setRange(0.01, 2.0)
@@ -729,6 +771,8 @@ class PropertyPanelWidget(QWidget):
         
         # 反馈
         feedback_layout = QHBoxLayout()
+        feedback_layout.setContentsMargins(0, 0, 0, 0)
+        feedback_layout.setSpacing(6)
         feedback_layout.addWidget(QLabel("反馈:"))
         self.feedback_spinbox = QDoubleSpinBox()
         self.feedback_spinbox.setRange(0.0, 1.0)
@@ -742,6 +786,8 @@ class PropertyPanelWidget(QWidget):
         
         # 混合比例
         mix_layout = QHBoxLayout()
+        mix_layout.setContentsMargins(0, 0, 0, 0)
+        mix_layout.setSpacing(6)
         mix_layout.addWidget(QLabel("混合比例:"))
         self.mix_spinbox = QDoubleSpinBox()
         self.mix_spinbox.setRange(0.0, 1.0)
@@ -757,7 +803,11 @@ class PropertyPanelWidget(QWidget):
         
         # 颤音（音量调制）
         tremolo_group = QGroupBox("颤音 (Tremolo)")
+        tremolo_group.setProperty("inspectorGroup", True)
+        tremolo_group.setProperty("innerGroup", True)
         tremolo_layout = QVBoxLayout()
+        tremolo_layout.setContentsMargins(6, 5, 6, 5)
+        tremolo_layout.setSpacing(6)
         tremolo_group.setLayout(tremolo_layout)
         
         # 启用复选框
@@ -767,6 +817,8 @@ class PropertyPanelWidget(QWidget):
         
         # 速度
         tremolo_rate_layout = QHBoxLayout()
+        tremolo_rate_layout.setContentsMargins(0, 0, 0, 0)
+        tremolo_rate_layout.setSpacing(6)
         tremolo_rate_layout.addWidget(QLabel("速度 (Hz):"))
         self.tremolo_rate_spinbox = QDoubleSpinBox()
         self.tremolo_rate_spinbox.setRange(0.1, 20.0)
@@ -779,6 +831,8 @@ class PropertyPanelWidget(QWidget):
         
         # 深度
         tremolo_depth_layout = QHBoxLayout()
+        tremolo_depth_layout.setContentsMargins(0, 0, 0, 0)
+        tremolo_depth_layout.setSpacing(6)
         tremolo_depth_layout.addWidget(QLabel("深度:"))
         self.tremolo_depth_spinbox = QDoubleSpinBox()
         self.tremolo_depth_spinbox.setRange(0.0, 1.0)

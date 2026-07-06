@@ -7,10 +7,12 @@
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QSpinBox,
     QVBoxLayout,
@@ -40,21 +42,29 @@ class PlaybackSettingsWidget(QWidget):
     
     def init_ui(self):
         """初始化UI"""
+        self.setObjectName("playbackSettingsPanel")
         layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
         self.setLayout(layout)
         
         # 说明文字
-        info_label = QLabel("设置每个音轨在播放时的音量占比（0-100%）。\n"
-                           "占比越高，该音轨在混音中的音量越大。")
-        info_label.setWordWrap(True)
-        info_label.setStyleSheet("color: gray; padding: 4px;")
-        layout.addWidget(info_label)
+        self.info_label = QLabel("设置播放时每个音轨在混音中的音量占比。")
+        self.info_label.setObjectName("panelSummary")
+        self.info_label.setWordWrap(True)
+        layout.addWidget(self.info_label)
+
+        controls_panel = QWidget()
+        controls_panel.setProperty("panelToolbar", True)
+        controls_layout = QVBoxLayout(controls_panel)
+        controls_layout.setContentsMargins(8, 6, 8, 6)
+        controls_layout.setSpacing(6)
         
         # 批量设置区域
         batch_layout = QHBoxLayout()
-        batch_layout.addWidget(QLabel("批量设置选中音轨:"))
+        batch_layout.setContentsMargins(0, 0, 0, 0)
+        batch_layout.setSpacing(6)
+        batch_layout.addWidget(QLabel("批量音量:"))
         
         self.batch_ratio_spinbox = QSpinBox()
         self.batch_ratio_spinbox.setRange(0, 100)
@@ -63,14 +73,17 @@ class PlaybackSettingsWidget(QWidget):
         batch_layout.addWidget(self.batch_ratio_spinbox)
         
         self.batch_apply_button = QPushButton("应用")
+        self.batch_apply_button.setProperty("primaryAction", True)
         self.batch_apply_button.clicked.connect(self.apply_batch_ratio)
         batch_layout.addWidget(self.batch_apply_button)
         
         batch_layout.addStretch()
-        layout.addLayout(batch_layout)
+        controls_layout.addLayout(batch_layout)
         
         # 全选/取消全选按钮
         select_layout = QHBoxLayout()
+        select_layout.setContentsMargins(0, 0, 0, 0)
+        select_layout.setSpacing(6)
         self.select_all_button = QPushButton("全选")
         self.select_all_button.clicked.connect(self.select_all)
         select_layout.addWidget(self.select_all_button)
@@ -80,20 +93,25 @@ class PlaybackSettingsWidget(QWidget):
         select_layout.addWidget(self.deselect_all_button)
         
         select_layout.addStretch()
-        layout.addLayout(select_layout)
+        controls_layout.addLayout(select_layout)
+        layout.addWidget(controls_panel)
         
         # 滚动区域（包含所有音轨设置）
         scroll_area = QScrollArea()
+        scroll_area.setObjectName("playbackTrackScroll")
+        scroll_area.setFrameShape(QFrame.NoFrame)
         scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll_area.setMinimumHeight(200)
         
         self.scroll_content = QWidget()
         self.scroll_layout = QVBoxLayout()
-        self.scroll_layout.setContentsMargins(4, 4, 4, 4)
-        self.scroll_layout.setSpacing(8)
+        self.scroll_layout.setContentsMargins(2, 2, 2, 2)
+        self.scroll_layout.setSpacing(6)
         self.scroll_content.setLayout(self.scroll_layout)
         
         scroll_area.setWidget(self.scroll_content)
+        self.scroll_area = scroll_area
         layout.addWidget(scroll_area)
 
     def _clear_track_layout(self) -> None:
@@ -153,10 +171,11 @@ class PlaybackSettingsWidget(QWidget):
     def create_track_volume_widget(self, track: Track, track_id: int) -> QWidget:
         """为单个音轨创建音量占比控件"""
         widget = QWidget()
+        widget.setProperty("trackVolumeRow", True)
         # 使用垂直布局，包含两行
         main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(4, 4, 4, 4)
-        main_layout.setSpacing(4)
+        main_layout.setContentsMargins(8, 6, 8, 6)
+        main_layout.setSpacing(6)
         widget.setLayout(main_layout)
         
         # 获取当前占比（如果没有设置，默认为100%）
@@ -165,7 +184,7 @@ class PlaybackSettingsWidget(QWidget):
         # 第一行：选择框、名称、主音按钮
         first_row = QHBoxLayout()
         first_row.setContentsMargins(0, 0, 0, 0)
-        first_row.setSpacing(8)
+        first_row.setSpacing(6)
         
         # 多选复选框
         checkbox = QCheckBox()
@@ -175,21 +194,29 @@ class PlaybackSettingsWidget(QWidget):
         
         # 音轨名称
         name_label = QLabel(track.name)
-        name_label.setMinimumWidth(100)
+        name_label.setMinimumWidth(0)
+        name_label.setToolTip(track.name)
+        name_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         # 如果是主音轨，加粗显示
         if track_id in self.track_volume_ratios and self.track_volume_ratios[track_id] > 0.7:
             font = name_label.font()
             font.setBold(True)
             name_label.setFont(font)
-        first_row.addWidget(name_label)
+        first_row.addWidget(name_label, 1)
         
-        first_row.addStretch()  # 添加弹性空间
+        # 占比显示标签
+        ratio_label = QLabel(f"{int(current_ratio * 100)}%")
+        ratio_label.setProperty("metricPill", True)
+        ratio_label.setMinimumWidth(44)
+        ratio_label.setMaximumWidth(52)
+        ratio_label.setAlignment(Qt.AlignCenter)
+        first_row.addWidget(ratio_label)
         
         # 主音按钮（快速设置为100%）
         main_button = QPushButton("主音")
         main_button.setCheckable(True)
-        main_button.setMinimumWidth(50)
-        main_button.setMaximumWidth(60)
+        main_button.setMinimumWidth(48)
+        main_button.setMaximumWidth(56)
         if current_ratio >= 0.95:  # 如果占比接近100%，视为主音
             main_button.setChecked(True)
         first_row.addWidget(main_button)
@@ -199,7 +226,7 @@ class PlaybackSettingsWidget(QWidget):
         # 第二行：滑条和占比显示标签
         second_row = QHBoxLayout()
         second_row.setContentsMargins(0, 0, 0, 0)
-        second_row.setSpacing(8)
+        second_row.setSpacing(6)
         
         # 音量占比滑块
         slider = QSlider(Qt.Horizontal)
@@ -207,13 +234,6 @@ class PlaybackSettingsWidget(QWidget):
         slider.setValue(int(current_ratio * 100))
         slider.valueChanged.connect(lambda v, tid=track_id: self.on_ratio_changed(tid, v))
         second_row.addWidget(slider, 1)  # 滑条占据剩余空间
-        
-        # 占比显示标签
-        ratio_label = QLabel(f"{int(current_ratio * 100)}%")
-        ratio_label.setMinimumWidth(45)
-        ratio_label.setMaximumWidth(50)
-        ratio_label.setAlignment(Qt.AlignCenter)
-        second_row.addWidget(ratio_label)
         
         main_layout.addLayout(second_row)
         

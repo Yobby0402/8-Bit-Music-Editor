@@ -5,7 +5,7 @@ Seed 风格参数面板。
 import json
 import sys
 
-from PyQt5.QtCore import QSettings
+from PyQt5.QtCore import QSettings, Qt
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -40,39 +41,49 @@ class StyleParamsWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("styleParamsPanel")
 
         self.settings = QSettings("8bit", "MusicMaker")
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setContentsMargins(6, 6, 6, 6)
         main_layout.setSpacing(6)
 
         self.summary_label = QLabel("尚未使用 Seed 生成项目。")
+        self.summary_label.setObjectName("panelSummary")
         self.summary_label.setWordWrap(True)
         font = self.summary_label.font()
         font.setPointSize(max(9, font.pointSize() - 1))
         self.summary_label.setFont(font)
         main_layout.addWidget(self.summary_label)
 
-        preset_layout = QVBoxLayout()
-        preset_layout.setContentsMargins(0, 4, 0, 4)
+        preset_box = QWidget()
+        preset_box.setProperty("panelToolbar", True)
+        preset_layout = QVBoxLayout(preset_box)
+        preset_layout.setContentsMargins(8, 6, 8, 6)
+        preset_layout.setSpacing(6)
 
         preset_row_top = QHBoxLayout()
+        preset_row_top.setContentsMargins(0, 0, 0, 0)
+        preset_row_top.setSpacing(6)
         preset_label = QLabel("预设：")
         self.preset_combo = QComboBox()
-        self.preset_combo.setMinimumWidth(160)
+        self.preset_combo.setMinimumWidth(0)
+        self.preset_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         preset_row_top.addWidget(preset_label)
         preset_row_top.addWidget(self.preset_combo, 1)
         preset_layout.addLayout(preset_row_top)
 
         preset_row_bottom = QHBoxLayout()
+        preset_row_bottom.setContentsMargins(0, 0, 0, 0)
+        preset_row_bottom.setSpacing(6)
         self.load_preset_button = QPushButton("加载预设")
-        self.save_preset_button = QPushButton("保存为预设")
+        self.save_preset_button = QPushButton("保存预设")
         preset_row_bottom.addStretch(1)
         preset_row_bottom.addWidget(self.load_preset_button)
         preset_row_bottom.addWidget(self.save_preset_button)
         preset_layout.addLayout(preset_row_bottom)
 
-        main_layout.addLayout(preset_layout)
+        main_layout.addWidget(preset_box)
 
         self._current_style = None
         self._current_variant = None
@@ -167,17 +178,22 @@ class StyleParamsWidget(QWidget):
         self.drum_scale_spin.setSingleStep(0.05)
         self.drum_scale_spin.setDecimals(2)
         drum_group = QGroupBox("鼓点整体")
+        drum_group.setProperty("inspectorGroup", True)
         drum_layout = QFormLayout(drum_group)
-        drum_layout.setContentsMargins(6, 4, 6, 4)
+        drum_layout.setContentsMargins(8, 6, 8, 6)
+        drum_layout.setHorizontalSpacing(8)
+        drum_layout.setVerticalSpacing(5)
+        drum_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        drum_layout.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.drum_scale_label = QLabel("整体力度缩放：")
         drum_layout.addRow(self.drum_scale_label, self.drum_scale_spin)
         main_layout.addWidget(drum_group)
 
         btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 4, 0, 0)
+        btn_row.setContentsMargins(0, 2, 0, 0)
         self.apply_button = QPushButton("应用到当前风格")
-        btn_row.addWidget(self.apply_button)
-        btn_row.addStretch(1)
+        self.apply_button.setProperty("primaryAction", True)
+        btn_row.addWidget(self.apply_button, 1)
         main_layout.addLayout(btn_row)
 
         main_layout.addStretch(1)
@@ -213,6 +229,7 @@ class StyleParamsWidget(QWidget):
 
     def _init_wave_combo(self, combo: QComboBox):
         combo.clear()
+        combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         combo.addItem("方波", WaveformType.SQUARE)
         combo.addItem("三角波", WaveformType.TRIANGLE)
         combo.addItem("锯齿波", WaveformType.SAWTOOTH)
@@ -236,8 +253,13 @@ class StyleParamsWidget(QWidget):
         r_spin: QDoubleSpinBox,
     ) -> QGroupBox:
         box = QGroupBox(title)
+        box.setProperty("inspectorGroup", True)
         layout = QFormLayout(box)
-        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(5)
+        layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        layout.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
         layout.addRow(QLabel("波形："), wave_combo)
         layout.addRow(QLabel("占空比："), duty_spin)
         layout.addRow(QLabel("Attack："), a_spin)

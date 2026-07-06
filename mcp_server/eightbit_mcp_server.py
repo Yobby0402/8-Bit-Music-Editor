@@ -18,6 +18,8 @@ from core.sequencer import Sequencer
 from core.sfx_generator import SfxKind
 
 DEFAULT_APP_CONTROL_URL = "http://127.0.0.1:8765"
+MCP_TARGET_RUNNING_APP = "running_app"
+MCP_TARGET_FALLBACK_MEMORY = "fallback_memory"
 
 
 def command_result_to_dict(result: AppCommandResult) -> dict[str, Any]:
@@ -28,6 +30,13 @@ def command_result_to_dict(result: AppCommandResult) -> dict[str, Any]:
 def create_default_bridge() -> AppControlBridge:
     """Create an isolated in-memory bridge for stdio MCP sessions."""
     return AppControlBridge(Sequencer(initialize_audio=False))
+
+
+def with_mcp_target(payload: dict[str, Any], target: str) -> dict[str, Any]:
+    """Mark whether an MCP result came from the live app or fallback bridge."""
+    result = dict(payload)
+    result["mcp_target"] = target
+    return result
 
 
 class LocalhostAppClient:
@@ -70,7 +79,10 @@ class McpCommandRouter:
 
     def _fallback(self, method_name: str, *args, **kwargs) -> dict[str, Any]:
         method = getattr(self.bridge, method_name)
-        return command_result_to_dict(method(*args, **kwargs))
+        return with_mcp_target(
+            command_result_to_dict(method(*args, **kwargs)),
+            MCP_TARGET_FALLBACK_MEMORY,
+        )
 
     def _app_or_fallback(
         self,
@@ -81,7 +93,10 @@ class McpCommandRouter:
         **kwargs,
     ) -> dict[str, Any]:
         try:
-            return self.app_client.request(path, payload)
+            return with_mcp_target(
+                self.app_client.request(path, payload),
+                MCP_TARGET_RUNNING_APP,
+            )
         except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError):
             return self._fallback(method_name, *args, **kwargs)
 

@@ -29,6 +29,16 @@ class FakeSequenceWidget:
         self.playhead_time = current_time
 
 
+class FakeUnifiedEditor:
+    def __init__(self, values):
+        self.preview_enabled = False
+        self.values = values
+
+    def set_preview_enabled(self, enabled):
+        self.preview_enabled = enabled
+        self.values.append(enabled)
+
+
 class FakeSequencer:
     def __init__(self):
         self.project = SimpleNamespace(bpm=120, original_bpm=120, bpm_segments=[])
@@ -54,7 +64,6 @@ class FakePlaybackWindow(MainWindowPlaybackOpsMixin):
     def __init__(self):
         self.sequencer = FakeSequencer()
         self.sequence_widget = FakeSequenceWidget()
-        self.unified_editor = SimpleNamespace(preview_enabled=False)
         self.play_stop_button = SimpleNamespace(
             icon=None,
             tooltip=None,
@@ -64,15 +73,13 @@ class FakePlaybackWindow(MainWindowPlaybackOpsMixin):
         self.playback_start_time = None
         self.playback_start_offset = 0.0
         self.preview_enabled_values = []
+        self.unified_editor = FakeUnifiedEditor(self.preview_enabled_values)
+        self.hover_preview_enabled = True
         self.oscilloscope_values = []
         self.status_bar = FakeStatusBar()
 
     def _has_pending_playback_prepare(self):
         return False
-
-    def _set_preview_enabled(self, enabled):
-        self.unified_editor.preview_enabled = enabled
-        self.preview_enabled_values.append(enabled)
 
     def _set_oscilloscope_playing(self, is_playing):
         self.oscilloscope_values.append(is_playing)
@@ -115,4 +122,42 @@ def test_stop_resets_playhead_to_start():
     assert window.sequence_widget.playhead_time == 0.0
     assert window.playback_start_time is None
     assert window.preview_enabled_values[-1] is True
+    assert window.status_bar.messages[-1] == "已停止"
+
+
+def test_hover_preview_toggle_disables_editor_preview():
+    window = FakePlaybackWindow()
+
+    window.set_hover_preview_enabled(False)
+
+    assert window.hover_preview_enabled is False
+    assert window.unified_editor.preview_enabled is False
+    assert window.preview_enabled_values[-1] is False
+    assert window.status_bar.messages[-1] == "悬停试听已关闭"
+
+
+def test_pause_keeps_hover_preview_disabled(monkeypatch):
+    window = FakePlaybackWindow()
+    window.set_hover_preview_enabled(False)
+    window.sequencer.playback_state.is_playing = True
+    window.playback_start_time = 10.0
+    window.playback_start_offset = 2.0
+    monkeypatch.setattr("ui.main_window_playback_ops.time.time", lambda: 13.25)
+
+    window.pause()
+
+    assert window.preview_enabled_values[-1] is False
+    assert window.unified_editor.preview_enabled is False
+    assert window.status_bar.messages[-1] == "已暂停"
+
+
+def test_stop_keeps_hover_preview_disabled():
+    window = FakePlaybackWindow()
+    window.set_hover_preview_enabled(False)
+    window.sequencer.playback_state.is_playing = True
+
+    window.stop()
+
+    assert window.preview_enabled_values[-1] is False
+    assert window.unified_editor.preview_enabled is False
     assert window.status_bar.messages[-1] == "已停止"

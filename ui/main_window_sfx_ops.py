@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QMessageBox
+from pathlib import Path
+
+from PyQt5.QtWidgets import QFileDialog, QMessageBox
 
 from core.app_control_bridge import AppControlBridge
-from core.sfx_ai_service import build_sfx_generation_messages, extract_json_object
-from core.sfx_generator import SfxKind, sfx_spec_from_dict, sfx_spec_to_dict
-from ui.background_tasks import LlmHttpThread
-from ui.settings_manager import get_settings_manager
-from ui.sfx_editor_dialog import SfxEditorWidget
+from core.models import Project
+from core.project_service import (
+    AudioExportDependencyError,
+    EmptyAudioExportError,
+    export_audio_range_document,
+)
+from core.sfx_generator import (
+    SfxKind,
+    SfxSpec,
+    build_sfx_notes,
+    make_sfx_track,
+    sfx_spec_to_dict,
+)
 
 
 def resolve_sfx_insert_beat(window) -> float:
@@ -21,17 +30,62 @@ def resolve_sfx_insert_beat(window) -> float:
     return max(0.0, project.seconds_to_beats(playhead_time))
 
 
+def build_sfx_preview_project(spec: SfxSpec, bpm: float) -> Project:
+    """Build a temporary project containing only the edited SFX."""
+    safe_bpm = float(bpm or 120.0)
+    project = Project(
+        name=f"SFX Preview - {spec.label}",
+        bpm=safe_bpm,
+        original_bpm=safe_bpm,
+    )
+    track = make_sfx_track(spec.label or "SFX")
+    track.notes = build_sfx_notes(project, spec, 0.0)
+    track.filter_params = spec.filter_params
+    track.delay_params = spec.delay_params
+    track.tremolo_params = spec.tremolo_params
+    track.vibrato_params = spec.vibrato_params
+    project.add_track(track)
+    return project
+
+
+def resolve_sfx_render_end_time(project: Project, spec: SfxSpec) -> float:
+    """Return a render end time with enough tail for SFX effects."""
+    base_end = project.beats_to_seconds(max(0.05, spec.duration_beats))
+    return max(0.25, base_end + 0.5)
+
+
+def export_sfx_spec_audio(
+    spec: SfxSpec,
+    audio_engine,
+    file_path: str,
+    *,
+    bpm: float,
+    format: str = "wav",
+):
+    """Export a single edited SFX without mixing in the active project."""
+    project = build_sfx_preview_project(spec, bpm)
+    end_time = resolve_sfx_render_end_time(project, spec)
+    return export_audio_range_document(
+        project,
+        audio_engine,
+        file_path,
+        start_time=0.0,
+        end_time=end_time,
+        format=format,
+        sfx_only=True,
+    )
+
+
+def _safe_sfx_file_stem(label: str) -> str:
+    stem = "".join(
+        character if character.isalnum() or character in ("-", "_") else "_"
+        for character in label.strip()
+    ).strip("_")
+    return stem or "sfx"
+
+
 class MainWindowSfxOpsMixin:
     """Sound-effect generation actions for MainWindow."""
-
-    def _cleanup_sfx_llm_thread(self) -> None:
-        thread = getattr(self, "_sfx_llm_thread", None)
-        if thread is None:
-            return
-        if thread.isRunning():
-            thread.wait(120000)
-        self._sfx_llm_thread = None
-        thread.deleteLater()
 
     def insert_sfx_preset(self, kind: SfxKind = "coin") -> None:
         """Generate an SFX preset and insert it at the current playhead."""
@@ -107,62 +161,95 @@ class MainWindowSfxOpsMixin:
         self.refresh_ui(preserve_selection=True, force_full_refresh=True)
         self.statusBar().showMessage(result.message)
 
-    def _request_sfx_ai_generation(self, dialog: SfxEditorWidget) -> None:
-        sm = get_settings_manager()
-        if not sm.is_ai_enabled():
-            QMessageBox.information(self, "SFX AI", "Enable local AI in Settings first.")
+    def preview_sfx_from_panel(self) -> None:
+        if not hasattr(self, "sfx_editor_panel"):
             return
-        model = sm.get_ai_model()
-        if not model:
-            QMessageBox.warning(self, "SFX AI", "Set a local AI model ID in Settings first.")
-            return
-        prompt = dialog.ai_prompt()
-        if not prompt:
-            QMessageBox.information(self, "SFX AI", "Describe the sound effect first.")
+        if self.sequencer.playback_state.is_playing or self._has_pending_playback_prepare():
+            self.statusBar().showMessage("请先停止播放，再试听当前音效")
             return
 
         try:
-            messages = build_sfx_generation_messages(prompt)
+            spec = self.sfx_editor_panel.spec()
         except ValueError as exc:
-            dialog.show_ai_error(str(exc))
+            self.statusBar().showMessage(str(exc))
             return
 
-        self._cleanup_sfx_llm_thread()
-        dialog.set_ai_busy(True)
-        thread = LlmHttpThread(
-            sm.get_ai_base_url(),
-            model,
-            messages,
-            api_key=sm.get_ai_api_key(),
-            timeout_sec=float(sm.get_ai_timeout_sec()),
-            temperature=0.4,
-            parent=None,
-        )
-        self._sfx_llm_thread = thread
-        thread.success.connect(lambda text: self._on_sfx_ai_success(dialog, text), type=Qt.QueuedConnection)
-        thread.failed.connect(lambda err: self._on_sfx_ai_failed(dialog, err), type=Qt.QueuedConnection)
-        thread.finished.connect(self._on_sfx_ai_thread_finished, type=Qt.QueuedConnection)
-        thread.start()
-
-    def _on_sfx_ai_success(self, dialog: SfxEditorWidget, text: str) -> None:
         try:
-            spec = sfx_spec_from_dict(extract_json_object(text))
+            project = build_sfx_preview_project(spec, self.sequencer.project.bpm)
+            end_time = resolve_sfx_render_end_time(project, spec)
+            audio = self.sequencer.audio_engine.generate_project_audio(
+                project,
+                start_time=0.0,
+                end_time=end_time,
+            )
+            if len(audio) == 0:
+                self.statusBar().showMessage("当前音效没有可试听的音频")
+                return
+            self.sequencer.audio_engine.stop_all()
+            self.sequencer.audio_engine.play_audio(audio, loop=False, volume=1.0)
+            self.statusBar().showMessage(f"正在试听音效: {spec.label}")
         except Exception as exc:
-            dialog.show_ai_error(f"Invalid SFX AI response: {exc}")
-            return
-        dialog.apply_ai_spec(spec)
-        dialog.set_ai_busy(False)
-        self.statusBar().showMessage(f"Generated SFX spec: {spec.label}")
+            self.statusBar().showMessage(f"试听音效失败: {exc}")
 
-    def _on_sfx_ai_failed(self, dialog: SfxEditorWidget, err: object) -> None:
-        dialog.show_ai_error(f"SFX AI request failed: {err}")
-
-    def _on_sfx_ai_thread_finished(self) -> None:
-        thread = getattr(self, "_sfx_llm_thread", None)
-        if thread is None:
+    def export_sfx_from_panel(self) -> None:
+        if not hasattr(self, "sfx_editor_panel"):
             return
-        self._sfx_llm_thread = None
-        thread.deleteLater()
+        try:
+            spec = self.sfx_editor_panel.spec()
+        except ValueError as exc:
+            self.statusBar().showMessage(str(exc))
+            return
+
+        last_dir = ""
+        if hasattr(self, "settings"):
+            last_dir = str(self.settings.value("last_save_directory", "") or "")
+        export_dir = Path(last_dir) if last_dir and Path(last_dir).exists() else Path.cwd()
+        suggested_path = export_dir / f"{_safe_sfx_file_stem(spec.label)}.wav"
+        file_path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "导出当前音效",
+            str(suggested_path),
+            "WAV 音频 (*.wav)",
+        )
+        if not file_path:
+            return
+
+        path = Path(file_path).expanduser()
+        if not path.suffix:
+            path = path.with_suffix(".wav")
+        if path.exists():
+            reply = QMessageBox.question(
+                self,
+                "覆盖文件",
+                f"文件已存在，是否覆盖？\n\n{path}",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                self.statusBar().showMessage("已取消导出当前音效")
+                return
+
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            result = export_sfx_spec_audio(
+                spec,
+                self.sequencer.audio_engine,
+                str(path),
+                bpm=self.sequencer.project.bpm,
+                format="wav",
+            )
+            if hasattr(self, "settings"):
+                self.settings.setValue("last_save_directory", str(path.parent))
+            self.statusBar().showMessage(f"已导出当前音效: {result.file_path}")
+            QMessageBox.information(self, "成功", f"SFX-only 音频已导出:\n{result.file_path}")
+        except EmptyAudioExportError:
+            QMessageBox.warning(self, "警告", "当前音效没有可导出的音频")
+        except AudioExportDependencyError as exc:
+            QMessageBox.warning(self, exc.title, exc.user_message)
+        except ImportError as exc:
+            QMessageBox.critical(self, "错误", f"导出失败:\n{exc}")
+        except Exception as exc:
+            QMessageBox.critical(self, "错误", f"导出当前音效失败:\n{exc}")
 
     def insert_coin_sfx(self) -> None:
         self.insert_sfx_preset("coin")
@@ -197,5 +284,8 @@ class MainWindowSfxOpsMixin:
 
 __all__ = [
     "MainWindowSfxOpsMixin",
+    "build_sfx_preview_project",
+    "export_sfx_spec_audio",
     "resolve_sfx_insert_beat",
+    "resolve_sfx_render_end_time",
 ]

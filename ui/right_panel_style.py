@@ -40,6 +40,47 @@ QCheckBox,
 QGroupBox {
     color: #173F20;
 }
+QLabel#panelTitle {
+    color: #103717;
+    padding: 2px 2px 4px 2px;
+    font-size: 14px;
+    font-weight: 700;
+}
+QLabel#panelSummary,
+QLabel#emptyState,
+QLabel#selectionSummary {
+    color: #41664B;
+    background-color: #EDF7F1;
+    border: 1px solid #D6E8E1;
+    border-radius: 6px;
+    padding: 8px;
+    line-height: 130%;
+}
+QLabel#emptyState {
+    color: #5B7561;
+}
+QLabel#selectionSummary {
+    color: #1F6E3A;
+    font-weight: 600;
+}
+QWidget[panelToolbar="true"] {
+    background-color: #EDF7F1;
+    border: 1px solid #D6E8E1;
+    border-radius: 6px;
+}
+QWidget[trackVolumeRow="true"] {
+    background-color: #FFFFFF;
+    border: 1px solid #DDEBE5;
+    border-radius: 6px;
+}
+QLabel[metricPill="true"] {
+    color: #1F6E3A;
+    background-color: #E4F4EA;
+    border: 1px solid #C9E7D4;
+    border-radius: 5px;
+    padding: 2px 6px;
+    font-weight: 600;
+}
 QGroupBox {
     border: 1px solid #DDEBE5;
     border-radius: 6px;
@@ -51,6 +92,16 @@ QGroupBox::title {
     subcontrol-origin: margin;
     left: 8px;
     padding: 0 4px;
+}
+QGroupBox[inspectorGroup="true"] {
+    margin-top: 7px;
+    padding: 8px 7px 7px 7px;
+}
+QGroupBox[innerGroup="true"] {
+    border-color: #E5F0EA;
+    margin-top: 6px;
+    padding: 7px 6px 6px 6px;
+    font-weight: 500;
 }
 QPushButton {
     color: #173F20;
